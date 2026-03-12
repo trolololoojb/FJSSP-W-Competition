@@ -50,6 +50,14 @@ def translate_fjssp(sequence : list[int], machines : list[int], durations : list
     return start_times, machines
 
 def translate(sequence : list[int], machines : list[int], workers : list[int], durations : list[list[list[int]]]) -> tuple[list[int], list[int], list[int]]:
+    """
+    Translates a job sequence into start times, machine assignments, and worker assignments.
+    Required Args:
+        sequence: List of job IDs
+        machines: List of machine assignments for each operation
+        workers: List of worker assignments for each operation
+        durations: 3D list of operation durations indexed by operation, machine, and worker
+    """
     
     class TimeSlot:
         def __init__(self) -> None:
