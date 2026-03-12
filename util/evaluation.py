@@ -1,10 +1,29 @@
 import numpy as np
 
 def makespan(start_times : list[int], machine_assignments : list[int], worker_assignments : list[int], durations : list[list[list[int]]]) -> float:
+    """
+    Args:
+        start_times: Startzeit jeder Operation in der festen Operationsreihenfolge.
+        machine_assignments: Zugewiesene Maschine pro Operation.
+        worker_assignments: Zugewiesener Worker pro Operation.
+        durations: Bearbeitungszeiten je Operation, Maschine und Worker.
+
+    Return:
+        Der Makespan als maximale Fertigstellungszeit aller Operationen.
+    """
     # NOTE: assume first operation to start at t = 0
     return np.max([start_times[i] + durations[i][machine_assignments[i]][worker_assignments[i]] for i in range(len(start_times))])
 
 def workload_balance(machine_assignments : list[int], worker_assignments : list[int], durations : list[list[list[int]]]) -> float:
+    """
+    Args:
+        machine_assignments: Zugewiesene Maschine pro Operation.
+        worker_assignments: Zugewiesener Worker pro Operation.
+        durations: Bearbeitungszeiten je Operation, Maschine und Worker.
+
+    Return:
+        Ein Ungleichgewichtsmaß der Worker-Auslastung basierend auf den aufsummierten Bearbeitungszeiten.
+    """
     n_workers = max(worker_assignments)
     working_time = [0] * n_workers
     for i in range(len(worker_assignments)):
@@ -16,9 +35,27 @@ def workload_balance(machine_assignments : list[int], worker_assignments : list[
     return result
 
 def makespan_fjssp(start_times : list[int], machine_assignments : list[int], durations : list[list[list[int]]]) -> float:
+    """
+    Args:
+        start_times: Startzeit jeder Operation in der festen Operationsreihenfolge.
+        machine_assignments: Zugewiesene Maschine pro Operation.
+        durations: Bearbeitungszeiten je Operation und Maschine.
+
+    Return:
+        Der Makespan als maximale Fertigstellungszeit aller Operationen fuer FJSSP ohne Worker-Dimension.
+    """
     return np.max([start_times[i] + durations[i][machine_assignments[i]] for i in range(len(start_times))])
 
 def translate_fjssp(sequence : list[int], machines : list[int], durations : list[list[list[int]]]) -> tuple[list[int], list[int]]:
+    """
+    Args:
+        sequence: Reihenfolge der Jobs im indirekten Encoding des Solvers.
+        machines: Maschinenzuweisung pro Operation in der festen Operationsreihenfolge.
+        durations: Bearbeitungszeiten je Operation und Maschine.
+
+    Return:
+        Ein Tupel aus berechneten Startzeiten und den uebergebenen Maschinenzuweisungen.
+    """
     def get_start_index(job : int, job_sequence : list[int]) -> int:
         for i in range(len(job_sequence)):
             if job_sequence[i] == job:
@@ -51,12 +88,14 @@ def translate_fjssp(sequence : list[int], machines : list[int], durations : list
 
 def translate(sequence : list[int], machines : list[int], workers : list[int], durations : list[list[list[int]]]) -> tuple[list[int], list[int], list[int]]:
     """
-    Translates a job sequence into start times, machine assignments, and worker assignments.
-    Required Args:
-        sequence: List of job IDs
-        machines: List of machine assignments for each operation
-        workers: List of worker assignments for each operation
-        durations: 3D list of operation durations indexed by operation, machine, and worker
+    Args:
+        sequence: Reihenfolge der Jobs im indirekten Encoding des Solvers.
+        machines: Maschinenzuweisung pro Operation in der festen Operationsreihenfolge.
+        workers: Workerzuweisung pro Operation in der festen Operationsreihenfolge.
+        durations: Bearbeitungszeiten je Operation, Maschine und Worker.
+
+    Return:
+        Ein Tupel aus berechneten Startzeiten, Maschinenzuweisungen und Workerzuweisungen.
     """
     
     class TimeSlot:
@@ -126,6 +165,14 @@ def translate(sequence : list[int], machines : list[int], workers : list[int], d
     return start_times, machines, workers
 
 def minizinc_score(data : dict[str, dict[str, tuple[float, float]]], ignoreCompletionTime : bool = False) -> dict[str, float]:
+    """
+    Args:
+        data: Ergebnisdaten pro Solver und Instanz, typischerweise als Tupel aus Laufzeit und Fitness.
+        ignoreCompletionTime: Wenn True, wird nur die Loesungsqualitaet und nicht die Zeit fuer Gleichstaende verwendet.
+
+    Return:
+        Ein Dictionary mit dem berechneten MiniZinc-Score pro Solver.
+    """
     scores = dict()
     for solver in data:
         scores[solver] = 0.0

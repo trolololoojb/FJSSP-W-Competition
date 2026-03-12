@@ -56,6 +56,12 @@ class Encoding:
         return Encoding(duration_copy, job_sequence_copy)
 
 class WorkerEncoding:
+    """
+    A class representing the encoding of a scheduling problem instance for the Flexible Job Shop Scheduling Problem with Worker Assignment (FJSSP-W).
+    The WorkerEncoding class encapsulates the durations of operations on different machines and workers, as well as the job sequence. 
+    It provides methods to access the durations, job sequence, and to retrieve the available machines and workers for each operation. 
+    The class also includes methods for creating copies of the encoding, both shallow and deep.
+    """
     def __init__(self, durations: list, job_sequence: list) -> None:
         self.__durations = durations
         self.__job_sequence = job_sequence
