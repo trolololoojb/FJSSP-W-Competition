@@ -18,6 +18,8 @@ Although there are many different methods for solving FJSSP-W (e.g. Mathematic
 
 The competition provides 30 FJSSP-W benchmark [instances](https://github.com/jrc-rodec/FJSSP-W-Competition/tree/main/instances) with diverse problem characteristics, which rely on well-known FJSSP problem instances. An evaluation method for the FJSSP-W instances as well as a simulation environment for the uncertain scenarios is also specified and provided as Python code. The participants must address at least one of the two different scenarios of the competition, i.e. they may decide to choose the option with or without uncertainty influences on the processing times. The distinction broadens the scope of the competition by allowing existing solvers that were not directly developed for optimization under uncertainty to participate in the competition. 
 
+All ressources can be found in: [Competition Repository](https://github.com/jrc-rodec/FJSSP-W-Competition)
+
 ## Competition Goals
 ---
 For the first scenario of the competition, the main objective to minimize the makespan across the proposed FJSSP-W test problems. The makespan represents the total time required to complete all tasks in a schedule, i.e. the duration from the start of the first task to the completion of the last task. It represents a critical metric in scheduling because it directly impacts the overall efficiency and performance of a production process. For this reason, it is often the main criterion for a company.  
