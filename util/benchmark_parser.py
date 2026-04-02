@@ -2,10 +2,23 @@ from .encoding import Encoding, WorkerEncoding
 import numpy as np
 
 class BenchmarkParser: 
+    """
+    A class responsible for parsing benchmark files for the Flexible Job Shop Scheduling Problem (FJSSP).
+    The parser reads the benchmark file, extracts the number of machines, operations, and their durations, and returns an Encoding object 
+    that represents the scheduling problem instance.
+    The benchmark file is expected to have a specific format, where the first line contains the number of machines and the total number of operations,
+    and the subsequent lines describe the operations for each job, including the machine options and their corresponding durations.
+    """
     def __init__(self):
         pass
 
     def parse_benchmark(self, path: str):
+        """
+        Args:
+            path: The path to the benchmark file.
+        Returns:
+            An Encoding object representing the scheduling problem instance.
+        """
         file_content = []
 
         try:
@@ -45,6 +58,11 @@ class BenchmarkParser:
         return Encoding(durations, job_sequence)
 
 class WorkerBenchmarkParser: 
+    """
+    A class responsible for parsing benchmark files for the Flexible Job Shop Scheduling Problem with Worker Assignment (FJSSP-W).
+    The parser reads the benchmark file, extracts the number of machines, workers, operations, and their durations, and returns a 
+    WorkerEncoding object that represents the scheduling problem instance.
+    """
     def __init__(self):
         pass
 

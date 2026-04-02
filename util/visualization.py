@@ -2,9 +2,37 @@ import matplotlib.pyplot as plt
 import statistics
 
 def calculate_value(fitness, best):
+    """
+    Berechnet die relative Abweichung eines Fitnesswerts vom besten Referenzwert.
+
+    Args:
+        fitness: Der zu bewertende Fitness- oder Makespan-Wert.
+        best: Der beste bekannte Referenzwert.
+
+    Return:
+        Die relative Abweichung `(fitness - best) / best`.
+    """
     return ((fitness - best) / best)
 
 def ecdf_inf(vectors, column, n_instances : int = 402, labels : list[str] = [], instances : list[str] = [], x_lim = (-0.1, 1.0), xlabel : str = None, ylabel : str = None, marker_frequence : int = 10, markers :list[str] = ['x', 'o', '^', '>', 'v', '<', '*']):
+    """
+    Erzeugt einen ECDF-aehnlichen Plot fuer sortierte Ergebnisvektoren und behandelt dabei auch `inf`-Werte.
+
+    Args:
+        vectors: Sortierte Werte pro Solver, die geplottet werden sollen.
+        column: Titel des Plots.
+        n_instances: Anzahl der betrachteten Instanzen zur Normierung der y-Achse.
+        labels: Anzeigenamen der Solver oder Datenreihen.
+        instances: Optionaler Platzhalter fuer Instanznamen; wird in der aktuellen Implementierung nicht verwendet.
+        x_lim: Untere und obere Grenze der x-Achse.
+        xlabel: Beschriftung der x-Achse.
+        ylabel: Beschriftung der y-Achse.
+        marker_frequence: Zielgroesse fuer die Markerhaeufigkeit pro Linie.
+        markers: Verfuegbare Marker fuer die unterschiedlichen Linien.
+
+    Return:
+        None. Die Funktion erzeugt und zeigt einen Matplotlib-Plot an.
+    """
     plot_vectors = []
     for vector in vectors:
         plot_vectors.append([[0.0],[0.0]])
@@ -34,6 +62,16 @@ def ecdf_inf(vectors, column, n_instances : int = 402, labels : list[str] = [], 
     plt.show()
 
 def get_plot_vectors(data : dict[str, list[float]], delta_scope : float = 1.0) -> tuple[list[float], list[str]]:
+    """
+    Wandelt Solver-Ergebnisse pro Instanz in sortierte Gap-Vektoren fuer die Visualisierung um.
+
+    Args:
+        data: Ergebnisdaten pro Solver und Instanz, typischerweise als finale Makespans.
+        delta_scope: Skalierungsfaktor fuer den Referenzwert bei der Gap-Berechnung.
+
+    Return:
+        Ein Tupel aus sortierten Plot-Vektoren und den zugehoerigen Solver-Labels.
+    """
     plot_data = dict()
     best_results = dict()
     example = list(data.keys())[0]
@@ -62,6 +100,20 @@ def get_plot_vectors(data : dict[str, list[float]], delta_scope : float = 1.0) -
     return vectors, labels
 
 def visualize_gaps(data : dict[str, list[float]], title : str = 'Fitness', n_instances : int = 1000,  x_lim_lb=-0.1, x_lim_ub=1.75, delta_scope : float = 1.0) -> None:
+    """
+    Visualisiert relative Abweichungen mehrerer Solver ueber viele Instanzen als ECDF-aehnlichen Gap-Plot.
+
+    Args:
+        data: Ergebnisdaten pro Solver und Instanz.
+        title: Basistitel des Plots.
+        n_instances: Anzahl der beruecksichtigten Instanzen fuer die y-Achsen-Normierung.
+        x_lim_lb: Untere Grenze der x-Achse.
+        x_lim_ub: Obere Grenze der x-Achse.
+        delta_scope: Optionaler Schwellenfaktor fuer begrenzte Gap-Darstellungen.
+
+    Return:
+        None. Die Funktion erzeugt und zeigt einen Matplotlib-Plot an.
+    """
     plot_vectors, labels = get_plot_vectors(data, delta_scope)
     if delta_scope < 1.0:
         plot_title = title + ' $\delta_{rel}$ <= '+ f'{(1.0-delta_scope)*100:.2f}%'
@@ -70,6 +122,23 @@ def visualize_gaps(data : dict[str, list[float]], title : str = 'Fitness', n_ins
     ecdf_inf(plot_vectors, plot_title, labels=labels, n_instances=n_instances, x_lim=(x_lim_lb, x_lim_ub), xlabel='$\delta_{rel}$', ylabel='Portion of Instances $\leq\delta_{rel}$')
 
 def progress_plot(fitness_data : list[float], timestamps : list[float], labels : list[str], title : str, marker_frequence : int = 10, markers :list[str] = ['x', 'o', '^', '>', 'v', '<', '*'], xlim_lb : float = -0.01, xlim_ub : float = None, hline : float = None) -> None:
+    """
+    Plottet den zeitlichen Fortschritt mehrerer Solver auf Basis aufgezeichneter Fitnesswerte.
+
+    Args:
+        fitness_data: Fitness- oder Gap-Verlaeufe pro Solver.
+        timestamps: Zeitstempel passend zu den Fitnesswerten pro Solver.
+        labels: Anzeigenamen der Solver.
+        title: Titel des Plots.
+        marker_frequence: Zielgroesse fuer die Markerhaeufigkeit pro Linie.
+        markers: Verfuegbare Marker fuer die unterschiedlichen Linien.
+        xlim_lb: Untere Grenze der x-Achse.
+        xlim_ub: Obere Grenze der x-Achse; falls `None`, wird sie aus den Daten bestimmt.
+        hline: Optionale horizontale Referenzlinie, z. B. fuer einen Ziel-Gap.
+
+    Return:
+        None. Die Funktion erzeugt und zeigt einen Matplotlib-Plot an.
+    """
     n = 0
     for i in range(len(labels)):
         x = timestamps[i]
@@ -95,6 +164,19 @@ def progress_plot(fitness_data : list[float], timestamps : list[float], labels :
 
 
 def visualize_timeline(data : dict[str, list[tuple[float, float]]], title : str = 'Progress', delta_scope : float = 1.0, xlim_lb = None, xlim_ub = None) -> None:
+    """
+    Bereitet Solver-Zeitreihen auf und visualisiert deren relative Fortschritte ueber die Zeit.
+
+    Args:
+        data: Zeitreihen pro Solver als Liste von Tupeln `(zeitpunkt, fitness)`.
+        title: Basistitel des Plots.
+        delta_scope: Optionaler Schwellenfaktor fuer begrenzte Gap-Darstellungen.
+        xlim_lb: Untere Grenze der x-Achse.
+        xlim_ub: Obere Grenze der x-Achse.
+
+    Return:
+        None. Die Funktion erzeugt und zeigt einen Matplotlib-Plot an.
+    """
     fitness_data = []
     timestamps = []
     labels = []
@@ -115,6 +197,17 @@ def visualize_timeline(data : dict[str, list[tuple[float, float]]], title : str 
 
 
 def rank_plot(data : dict[str, dict[str, tuple[float,float]]], alpha : float = 0.05, ignore_time : bool = False) -> None:
+    """
+    Erstellt einen Rangvergleich mehrerer Solver mit `autorank` und visualisiert statistische Unterschiede.
+
+    Args:
+        data: Ergebnisdaten pro Solver und Instanz, typischerweise mit Zeit- und Fitnessinformation.
+        alpha: Signifikanzniveau fuer den statistischen Test.
+        ignore_time: Wenn True, wird nur die Loesungsqualitaet und nicht die Laufzeit betrachtet.
+
+    Return:
+        None. Die Funktion erzeugt und zeigt einen Matplotlib-Plot an.
+    """
     import pandas as pd
     from autorank import autorank, plot_stats
     
@@ -143,6 +236,16 @@ def rank_plot(data : dict[str, dict[str, tuple[float,float]]], alpha : float = 0
     plt.show()
 
 def show_simulation_results(instance : dict, results : list[float]):
+    """
+    Visualisiert die Ergebnisse mehrerer Unsicherheits-Simulationen fuer einen einzelnen Plan.
+
+    Args:
+        instance: Instanz- oder Planinformationen; genutzt wird insbesondere `instance["e"]` fuer den geplanten Makespan.
+        results: Makespans aus den einzelnen Simulationen.
+
+    Return:
+        None. Die Funktion erzeugt und zeigt einen Matplotlib-Plot an.
+    """
 
     plt.rcParams['axes.grid'] = True
     plt.rcParams['pdf.fonttype'] = 42
@@ -159,6 +262,19 @@ def show_simulation_results(instance : dict, results : list[float]):
     plt.show()
 
 def show_simulation_comparison(results : list[list[float]], labels : list[str], instance : dict, title : str = None, mark_average : bool = False):
+    """
+    Vergleicht mehrere Mengen von Simulationsergebnissen uebersichtlich als Sortierplot und Boxplot.
+
+    Args:
+        results: Simulationsergebnisse pro Solver oder Variante.
+        labels: Anzeigenamen passend zu den Ergebnislisten.
+        instance: Instanz- oder Planinformationen; genutzt wird insbesondere `instance["e"]` fuer den geplanten Makespan.
+        title: Optionaler Gesamttitel der Abbildung.
+        mark_average: Wenn True, wird der Mittelwert jeder Ergebnisliste im linken Plot markiert.
+
+    Return:
+        None. Die Funktion erzeugt und zeigt einen Matplotlib-Plot an.
+    """
     plt.rcParams['axes.grid'] = True
     plt.rcParams['pdf.fonttype'] = 42
     plt.rcParams['ps.fonttype'] = 42
