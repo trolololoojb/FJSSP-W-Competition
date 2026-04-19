@@ -1,13 +1,95 @@
 from __future__ import annotations
 
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import List, Sequence, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 import math
 import random
 import time
 
 from util.evaluation import translate, makespan
 from util.graph import run_n_simulations
+
+
+def is_simulatable_schedule(
+    start_times: Sequence[int],
+    end_times: Sequence[int],
+    machine_assignments: Sequence[int],
+    worker_assignments: Sequence[int],
+    job_sequence: Sequence[int],
+) -> bool:
+    """
+    Validate that a decoded schedule can be safely passed to stochastic simulation.
+
+    The check is intentionally conservative: candidates that violate temporal
+    consistency, resource constraints, or acyclicity are rejected early and can
+    be scored with +inf instead of crashing the GA.
+    """
+    n_operations = len(start_times)
+    if not (
+        len(end_times) == n_operations
+        and len(machine_assignments) == n_operations
+        and len(worker_assignments) == n_operations
+        and len(job_sequence) == n_operations
+    ):
+        return False
+
+    for i in range(n_operations):
+        if end_times[i] < start_times[i]:
+            return False
+
+    adjacency: Dict[int, Set[int]] = defaultdict(set)
+    indegree = [0] * n_operations
+
+    def add_edge(source: int, target: int) -> bool:
+        if source == target:
+            return False
+        if target not in adjacency[source]:
+            adjacency[source].add(target)
+            indegree[target] += 1
+        return True
+
+    job_operations: Dict[int, List[int]] = defaultdict(list)
+    for op_index, job_id in enumerate(job_sequence):
+        job_operations[job_id].append(op_index)
+
+    for operations in job_operations.values():
+        for predecessor, successor in zip(operations, operations[1:]):
+            if end_times[predecessor] > start_times[successor]:
+                return False
+            if not add_edge(predecessor, successor):
+                return False
+
+    def validate_resource(assignments: Sequence[int]) -> bool:
+        grouped_operations: Dict[int, List[int]] = defaultdict(list)
+        for op_index, resource_id in enumerate(assignments):
+            grouped_operations[resource_id].append(op_index)
+
+        for operations in grouped_operations.values():
+            operations.sort(key=lambda op_index: (start_times[op_index], end_times[op_index], op_index))
+            for predecessor, successor in zip(operations, operations[1:]):
+                if start_times[successor] < end_times[predecessor]:
+                    return False
+                if not add_edge(predecessor, successor):
+                    return False
+        return True
+
+    if not validate_resource(machine_assignments):
+        return False
+    if not validate_resource(worker_assignments):
+        return False
+
+    queue = deque(op_index for op_index, degree in enumerate(indegree) if degree == 0)
+    visited = 0
+    while queue:
+        current = queue.popleft()
+        visited += 1
+        for successor in adjacency[current]:
+            indegree[successor] -= 1
+            if indegree[successor] == 0:
+                queue.append(successor)
+
+    return visited == n_operations
 
 
 @dataclass
@@ -414,17 +496,32 @@ class WFJSSPGA:
                 start_times[i] + self.config.durations[i][machine_assignments[i]][worker_assignments[i]]
                 for i in range(len(start_times))
             ]
-            results, robust_makespan, robust_makespan_stdev, R = run_n_simulations(
+            if not is_simulatable_schedule(
                 start_times,
                 end_times,
                 machine_assignments,
                 worker_assignments,
                 self.config.job_sequence,
-                self.config.durations,
-                self.config.uncertainty_parameters,
-                self.config.n_simulations,
-                processing_times=True
-            )
+            ):
+                ind.fitness["makespan"] = math.inf
+                self.function_evaluations += 1
+                return math.inf
+            try:
+                results, robust_makespan, robust_makespan_stdev, R = run_n_simulations(
+                    start_times,
+                    end_times,
+                    machine_assignments,
+                    worker_assignments,
+                    self.config.job_sequence,
+                    self.config.durations,
+                    self.config.uncertainty_parameters,
+                    self.config.n_simulations,
+                    processing_times=True
+                )
+            except (RecursionError, Exception):
+                ind.fitness["makespan"] = math.inf
+                self.function_evaluations += 1
+                return math.inf
             ind.fitness["makespan"] = robust_makespan
             ind.fitness["robust_makespan_stdev"] = robust_makespan_stdev
             ind.fitness["R"] = R
@@ -593,6 +690,24 @@ class WFJSSPGA:
         restarts = 0
         self.function_evaluations = 0
         start_time = time.time()
+        history = []
+
+        def record_history() -> None:
+            history.append(
+                {
+                    "generation": generation,
+                    "best_makespan": float(self.population[0].fitness["makespan"]),
+                    "overall_best_makespan": float(overall_best[0].fitness["makespan"]),
+                    "function_evaluations": int(self.function_evaluations),
+                    "mutation_probability": float(mutation_probability),
+                    "population_size": int(population_size),
+                    "offspring_amount": int(offspring_amount),
+                    "restarts": int(restarts),
+                    "runtime_s": float(time.time() - start_time),
+                }
+            )
+
+        record_history()
 
         while True:
             best_fitness = overall_best[0].fitness["makespan"]
@@ -654,6 +769,7 @@ class WFJSSPGA:
                             known_best.add(id(ind))
 
             generation += 1
+            record_history()
 
         return {
             "best": overall_best[0],
@@ -663,6 +779,7 @@ class WFJSSPGA:
             "function_evaluations": self.function_evaluations,
             "runtime_s": time.time() - start_time,
             "restarts": restarts,
+            "history": history,
         }
 
 
