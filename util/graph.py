@@ -4,6 +4,28 @@ import numpy as np
 import statistics
 
 def run_n_simulations(s, e, m, w, js, d, uncertainty_parameters, n_simulations, uncertainty_source : str = 'worker', processing_times : bool = False, machine_breakdowns : bool = False, worker_unavailabilites : bool = False):
+    """
+    Runs n simulations of the schedule with the given uncertainty parameters and returns the results.
+    Params:
+    s: list of start times
+    e: list of end times
+    m: list of machines    
+    w: list of workers
+    js: list of job ids
+    d: 3D list of processing times [operation][machine][worker]
+    uncertainty_parameters: list of parameters for the uncertainty distributions
+    n_simulations: number of simulations to run
+    uncertainty_source: source of uncertainty, either 'worker' or 'machine'
+    processing_times: whether to simulate processing time uncertainty
+    machine_breakdowns: whether to simulate machine breakdowns
+    worker_unavailabilites: whether to simulate worker unavailabilities
+
+    Return:
+    results: list of makespan values for each simulation
+    robust_makespan: mean of the makespan values
+    robust_makespan_stdev: standard deviation of the makespan values
+    R: robust makespan divided by the original makespan
+    """
     results = []
     for i in range(n_simulations):
         g = Graph(s, e, m, w, js)
@@ -88,6 +110,21 @@ class Graph:
         return n_changes
 
     def simulate_processing_times(self, d, wv, uncertainty_source : str = 'worker'):
+        """
+            English: Simulates processing time uncertainty by updating the processing times of the operations 
+            according to the given uncertainty parameters and then updating the schedule accordingly. 
+            Returns the number of changes that were made to the schedule.
+            German: Simuliert die Unsicherheit der Bearbeitungszeiten, indem die Bearbeitungszeiten der Operationen
+            entsprechend den gegebenen Unsicherheitsparametern aktualisiert und dann der Zeitplan entsprechend aktualisiert wird.
+            Gibt die Anzahl der Änderungen zurück, die am Zeitplan vorgenommen wurden.
+
+            Params:
+                d: 3D list of processing times [operation][machine][worker]
+                wv: list of parameters for the processing time uncertainty distributions
+                uncertainty_source: source of uncertainty, either 'worker' or 'machine'
+            Returns:
+                changes: number of changes that were made to the schedule
+        """
         open_list = []
         closed_list = []
         open_list.extend(self.roots)
@@ -198,6 +235,18 @@ class Graph:
         return self.update()
 
     def simulate(self, d, wv = None, processing_times : bool = False, machine_breakdowns : bool = False, worker_unavailabilities : bool = False, uncertainty_source : str = 'worker'):
+        """
+        Simulates the schedule with the given uncertainty parameters. Returns the number of conflicts that occurred during the simulation.
+        Params:
+            d: 3D list of processing times [operation][machine][worker]
+            wv: list of parameters for the processing time uncertainty distributions
+            processing_times: whether to simulate processing time uncertainty
+            machine_breakdowns: whether to simulate machine breakdowns
+            worker_unavailabilities: whether to simulate worker unavailabilities
+            uncertainty_source: source of uncertainty, either 'worker' or 'machine'
+        Returns:
+            n_conflicts: number of conflicts that occurred during the simulation
+        """
         n_conflicts = 0
         if processing_times:
             n_conflicts += self.simulate_processing_times(d, wv, uncertainty_source)
