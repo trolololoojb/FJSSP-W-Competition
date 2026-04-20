@@ -1,0 +1,10 @@
+##### scenario 1 example #####
+
+Instance;Fitness;FunctionEvaluations;StartTimes;MachineAssignments;WorkerAssignments
+Instance1;10.0;5000000;[10,0,5,3];[1,0,0,1];[0,1,0,2]
+
+
+##### scenario 2 example #####
+
+Instance;Fitness;FunctionEvaluations;StartTimes;MachineAssignments;WorkerAssignments;UncertaintyParameters
+Instance1;10.0;5000000;[10,0,5,3];[1,0,0,1];[0,1,0,2];[[0.1,1.0,1.0],[0.43,4.3,1.0],[0.12,1.2,1.0],[0.34,3.4,1.0]]

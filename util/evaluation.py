@@ -25,7 +25,7 @@ def workload_balance(machine_assignments : list[int], worker_assignments : list[
         Ein Ungleichgewichtsmaß der Worker-Auslastung basierend auf den aufsummierten Bearbeitungszeiten.
     """
     n_workers = max(worker_assignments)
-    working_time = [0] * n_workers
+    working_time = [0] * (n_workers+1)
     for i in range(len(worker_assignments)):
         working_time[worker_assignments[i]] += durations[i][machine_assignments[i]][worker_assignments[i]]
     mean_working_time = np.mean(working_time)
