@@ -7,7 +7,7 @@ This provided environment can be used to test and compare different algorithms f
 Note that while a translation algorithm between FJSSP and FJSSP-W instances is provided, the FJSSP-W instances are generated randomly (based on the respective FJSSP instance). The provided best known results for the FJSSP-W are specific to the FJSSP-W instances which are provided and can not not be used for comparison with newly generated instances.
 
 ## Structure
-The repository is divided into the [util](https://github.com/jrc-rodec/FJSSP-W-Benchmarking/tree/main/util) and [instances](https://github.com/jrc-rodec/FJSSP-W-Benchmarking/tree/main/instances) subsections, as well as the example files in the root directory.
+The repository is divided into the [util](https://github.com/jrc-rodec/FJSSP-W-Competition/tree/main/util) and [instances](https://github.com/jrc-rodec/FJSSP-W-Competition/tree/main/instances) subsections, as well as the example files in the root directory.
 
 ### Util
 The util section contains the provided APIs for comparison and evaluation.

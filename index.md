@@ -16,7 +16,9 @@ The competition on Flexible Job Shop Scheduling Problems with Worker Flexibility
 
 Although there are many different methods for solving FJSSP-W (e.g. Mathematical Programming, Constraint Programming, etc.), this competition is especially designed for meta-heuristics, such as Evolutionary Algorithms, Swarm Algorithms, or other nature- and physics-inspired methods. Such algorithms often show great results, especially for very complex problem instances. Since there are only a few comparable benchmark instances, such algorithms should demonstrate their capabilities in this competition and compare their performance. In this way, the research community can gain valuable insights into the performance and working principles of contemporary solvers for this class of problems. 
 
-The competition provides 30 FJSSP-W benchmark instances with diverse problem characteristics, which rely on well-known FJSSP problem instances. An evaluation method for the FJSSP-W instances as well as a simulation environment for the uncertain scenarios is also specified and provided as Python code. The participants must address at least one of the two different scenarios of the competition, i.e. they may decide to choose the option with or without uncertainty influences on the processing times. The distinction broadens the scope of the competition by allowing existing solvers that were not directly developed for optimization under uncertainty to participate in the competition. 
+The competition provides 30 FJSSP-W benchmark [instances](https://github.com/jrc-rodec/FJSSP-W-Competition/tree/main/instances) with diverse problem characteristics, which rely on well-known FJSSP problem instances. An evaluation method for the FJSSP-W instances as well as a simulation environment for the uncertain scenarios is also specified and provided as Python code. The participants must address at least one of the two different scenarios of the competition, i.e. they may decide to choose the option with or without uncertainty influences on the processing times. The distinction broadens the scope of the competition by allowing existing solvers that were not directly developed for optimization under uncertainty to participate in the competition. 
+
+All ressources can be found in: [Competition Repository](https://github.com/jrc-rodec/FJSSP-W-Competition)
 
 ## Competition Goals
 ---
@@ -74,14 +76,15 @@ The submissions need to include
     </ul>
     <li>a description of the algorithm (solver) </li>
     <li>the code of the solver </li>
-    <li>a description of the used hardware - <b>Please use the conference templates for your submissions and note the page limitations for competition contributions.</b> In case of a late submission we can not guarantee an inclusion of the contribution in the conference proceedings.</li>
+    <li>a description of the used hardware</li>
+	<li><b>Please use the conference templates for your submissions and note the page limitations for competition contributions.</b> In case of a late submission we can not guarantee an inclusion of the contribution in the conference proceedings.</li>
     <li>Name, affiliation and emails of the participants </li>
 </ul>
 The lists are ordered according to the jobs of the benchmark instance (e.g. Job 1 Operation 1, Job 1 Operation 2, Job 2 Operation 1, Job 3 Operation 1, Job 3 Operation 2). 
 
 The functions used to determine the makespan and workload balance are provided by the competition to make sure everyone uses the same metrics. The required simulation functions are also provided. 
 
-In case there are any open questions about the submission process or format, you can contact: david.hutter@fhv.at
+In case there are any open questions about the submission process or format, you can contact: <david.hutter@fhv.at>
 
 ### Paper 
 
