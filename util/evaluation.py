@@ -8,7 +8,7 @@ def workload_balance(machine_assignments : list[int], worker_assignments : list[
     n_workers = max(worker_assignments)
     working_time = [0] * n_workers
     for i in range(len(worker_assignments)):
-        working_time[worker_assignments[i]] += durations[i][machine_assignments[i]][worker_assignments[i]]
+        working_time[worker_assignments[i]-1] += durations[i][machine_assignments[i]][worker_assignments[i]]
     mean_working_time = np.mean(working_time)
     result = 0.0
     for i in range(len(working_time)):

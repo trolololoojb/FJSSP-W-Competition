@@ -85,7 +85,7 @@ In case there are any open questions about the submission process or format, you
 
 ### Paper 
 
-Each submission needs to be accompanied with a formal description of the solver applied that incorporates a proper algorithm description in pseudo code as well as the mandatory results requested for this specific competition. The authors are required to use a submission template prepared by the organizing team and made available in the submission repository in case the competition is accepted. 
+Each submission needs to be accompanied with a formal description of the solver applied that incorporates a proper algorithm description in pseudo code as well as the mandatory results requested for this specific competition. The authors are required to use a submission template prepared by the organizing team and made available in the competition repository. The example format for scenario 1 as well as scenario 2 are contained in the `example_submissions.csv` file. 
 
 Each competition entry is expected to report the working principles of the approach as well as the obtained results in form of a paper submitted in style of the conference requirements. 
 
