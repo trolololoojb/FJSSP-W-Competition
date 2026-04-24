@@ -7,8 +7,11 @@ import math
 import random
 import time
 
+import numpy as np
+
 from util.evaluation import translate, makespan
 from util.graph import run_n_simulations
+from solver.GA.rl_mutation_agent import RLMutationAgent, RLMutationAgentConfig
 
 
 def is_simulatable_schedule(
@@ -123,6 +126,27 @@ class WorkerGAConfig:
     uncertainty_parameters: Optional[List[List[float]]] = None # optional parameters for the uncertainty model used in stochastic evaluation, expected shape [n_ops][n_machines], where each entry is a parameter (e.g. standard deviation) for the processing time distribution of that operation on that machine. If None, no uncertainty will be applied and the deterministic durations will be used in the simulations.
     n_simulations: int = 100 # number of simulations to run for stochastic evaluation when use_stochastic_evaluation is True
     seed: Optional[int] = None # random seed for reproducibility
+    enable_rl_mutation_control: bool = False
+    rl_update_interval: int = 16
+    rl_gamma: float = 0.99
+    rl_lambda: float = 0.95
+    rl_clip_epsilon: float = 0.2
+    rl_learning_rate: float = 1e-3
+    rl_hidden_size: int = 32
+    rl_entropy_coef: float = 0.01
+    rl_value_coef: float = 0.5
+    rl_reward_weights: Dict[str, float] = field(
+        default_factory=lambda: {
+            "global_best_improvement": 3.0,
+            "population_mean_improvement": 0.75,
+            "diversity_bonus": 0.1,
+            "infeasible_penalty": 0.75,
+            "stagnation_penalty": 0.05,
+        }
+    )
+    rl_history_length: int = 3
+    rl_warmup_generations: int = 0
+    rl_seed: Optional[int] = None
 
     # derived fields
     n_jobs: int = field(init=False)
@@ -398,47 +422,128 @@ class WFJSSPIndividual:
         return child
 
     def mutate(self, p: float) -> None:
+        self.mutate_weighted(p, (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0))
+
+    def mutate_sequence_once(self, index: int) -> bool:
         """
         Englisch:
-        Mutates the individual with probability p, changing sequence, assignments, or workers.
+        Applies one sequence mutation around the given operation index.
         Deutsch:
-        Mutatiert das Individuum mit Wahrscheinlichkeit p, ändert Sequenz, Zuweisungen oder Arbeiter.
+        Führt eine Sequenzmutation um den gegebenen Operationsindex aus.
         Args:
-            p (float): Mutation probability.
+            index (int): Operation index used as anchor point.
         Returns:
-            None
+            bool: True if the mutation changed the individual.
         """
-        for i in range(self.config.n_operations):
-            if self.rng.random() < p:
-                attempts = 0
-                while True:
-                    swap = self.rng.randrange(self.config.n_operations)
-                    attempts += 1
-                    if self.sequence[swap] != self.sequence[i] or attempts >= 100:
-                        break
-                self.sequence[i], self.sequence[swap] = self.sequence[swap], self.sequence[i]
+        if self.config.n_operations <= 1:
+            return False
+        attempts = 0
+        swap = index
+        while attempts < 100:
+            swap = self.rng.randrange(self.config.n_operations)
+            attempts += 1
+            if self.sequence[swap] != self.sequence[index]:
+                break
+        if swap == index or self.sequence[swap] == self.sequence[index]:
+            return False
+        self.sequence[index], self.sequence[swap] = self.sequence[swap], self.sequence[index]
+        return True
 
-            if self.rng.random() < p and len(self.config.available_machines[i]) > 1:
-                attempts = 0
-                while True:
-                    idx = self.rng.randrange(len(self.config.available_machines[i]))
-                    attempts += 1
-                    new_machine = self.config.available_machines[i][idx]
-                    if new_machine != self.assignments[i] or attempts >= 100:
-                        break
-                self.assignments[i] = new_machine
-                if self.workers[i] not in self.config.available_workers[i][self.assignments[i]]:
-                    self.workers[i] = self.rng.choice(self.config.available_workers[i][self.assignments[i]])
+    def mutate_machine_once(self, index: int) -> bool:
+        if len(self.config.available_machines[index]) <= 1:
+            return False
+        candidates = [machine for machine in self.config.available_machines[index] if machine != self.assignments[index]]
+        if not candidates:
+            return False
+        self.assignments[index] = self.rng.choice(candidates)
+        valid_workers = self.config.available_workers[index][self.assignments[index]]
+        if self.workers[index] not in valid_workers:
+            self.workers[index] = self.rng.choice(valid_workers)
+        return True
 
-            if self.rng.random() < p and len(self.config.available_workers[i][self.assignments[i]]) > 1:
-                attempts = 0
-                while True:
-                    idx = self.rng.randrange(len(self.config.available_workers[i][self.assignments[i]]))
-                    attempts += 1
-                    new_worker = self.config.available_workers[i][self.assignments[i]][idx]
-                    if new_worker != self.workers[i] or attempts >= 100:
-                        break
-                self.workers[i] = new_worker
+    def mutate_worker_once(self, index: int) -> bool:
+        candidates = [
+            worker
+            for worker in self.config.available_workers[index][self.assignments[index]]
+            if worker != self.workers[index]
+        ]
+        if not candidates:
+            return False
+        self.workers[index] = self.rng.choice(candidates)
+        return True
+
+    def _valid_mutation_operator_indices(self, index: int) -> List[int]:
+        valid_indices: List[int] = []
+        if self.config.n_operations > 1 and any(job != self.sequence[index] for job in self.sequence):
+            valid_indices.append(0)
+        if len(self.config.available_machines[index]) > 1:
+            valid_indices.append(1)
+        current_machine = self.assignments[index]
+        if len(self.config.available_workers[index][current_machine]) > 1:
+            valid_indices.append(2)
+        return valid_indices
+
+    def mutate_weighted(self, p: float, mix: Sequence[float]) -> Dict[str, int]:
+        counts = {"sequence": 0, "machine": 0, "worker": 0, "events": 0, "no_op": 0}
+        if self.config.n_operations <= 0:
+            return counts
+
+        mix_array = np.asarray(mix, dtype=float).reshape(-1)
+        if mix_array.size != 3 or not np.all(np.isfinite(mix_array)):
+            mix_array = np.array([1.0 / 3.0] * 3, dtype=float)
+        mix_array = np.clip(mix_array, 0.0, None)
+        total = float(np.sum(mix_array))
+        if total <= 0.0:
+            mix_array = np.array([1.0 / 3.0] * 3, dtype=float)
+        else:
+            mix_array = mix_array / total
+
+        operators = (
+            ("sequence", self.mutate_sequence_once),
+            ("machine", self.mutate_machine_once),
+            ("worker", self.mutate_worker_once),
+        )
+
+        for index in range(self.config.n_operations):
+            if self.rng.random() >= p:
+                continue
+            counts["events"] += 1
+
+            valid_indices = self._valid_mutation_operator_indices(index)
+
+            applicable = []
+            applicable_weights = []
+            for op_idx in valid_indices:
+                name, op_fn = operators[op_idx]
+                applicable.append((name, op_fn))
+                applicable_weights.append(mix_array[op_idx])
+
+            if not applicable:
+                counts["no_op"] += 1
+                continue
+
+            weight_sum = float(sum(applicable_weights))
+            if weight_sum <= 0.0:
+                applicable_weights = [1.0 / len(applicable)] * len(applicable)
+            else:
+                applicable_weights = [weight / weight_sum for weight in applicable_weights]
+
+            draw = self.rng.random()
+            cumulative = 0.0
+            chosen_name = applicable[-1][0]
+            chosen_fn = applicable[-1][1]
+            for (name, op_fn), weight in zip(applicable, applicable_weights):
+                cumulative += weight
+                if draw <= cumulative:
+                    chosen_name = name
+                    chosen_fn = op_fn
+                    break
+
+            if chosen_fn(index):
+                counts[chosen_name] += 1
+            else:
+                counts["no_op"] += 1
+        return counts
 
 
 class WFJSSPGA:
@@ -463,6 +568,13 @@ class WFJSSPGA:
         self.rng = random.Random(config.seed)
         self.population: List[WFJSSPIndividual] = []
         self.function_evaluations = 0
+        self.last_mutation_operator_counts = {
+            "sequence": 0,
+            "machine": 0,
+            "worker": 0,
+            "events": 0,
+            "no_op": 0,
+        }
 
     def evaluate(self, ind: WFJSSPIndividual) -> float:
         """
@@ -596,6 +708,7 @@ class WFJSSPGA:
         offspring_amount: int,
         tournament_size: int,
         mutation_probability: float,
+        mutation_mix: Optional[Sequence[float]] = None,
     ) -> List[WFJSSPIndividual]:
         """
         Englisch:
@@ -606,16 +719,168 @@ class WFJSSPGA:
             offspring_amount (int): Number of offspring to create.
             tournament_size (int): Size of the tournament for selection.
             mutation_probability (float): Probability of mutation.
+            mutation_mix (Optional[Sequence[float]]): Optional weighted mutation mix.
         Returns:
             List[WFJSSPIndividual]: List of offspring individuals.
         """
         offspring: List[WFJSSPIndividual] = []
+        operator_counts = {"sequence": 0, "machine": 0, "worker": 0, "events": 0, "no_op": 0}
         for _ in range(offspring_amount):
             child = self.recombine(tournament_size)
-            child.mutate(mutation_probability)
+            if mutation_mix is None:
+                child.mutate(mutation_probability)
+            else:
+                child_counts = child.mutate_weighted(mutation_probability, mutation_mix)
+                for key, value in child_counts.items():
+                    operator_counts[key] = operator_counts.get(key, 0) + int(value)
             self.evaluate(child)
             offspring.append(child)
+        self.last_mutation_operator_counts = operator_counts
         return offspring
+
+    @staticmethod
+    def _normalize_mutation_mix(mix: Optional[Sequence[float]]) -> List[float]:
+        uniform = [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]
+        if mix is None:
+            return uniform
+        mix_array = np.asarray(mix, dtype=float).reshape(-1)
+        if mix_array.size != 3 or not np.all(np.isfinite(mix_array)):
+            return uniform
+        mix_array = np.clip(mix_array, 0.0, None)
+        total = float(np.sum(mix_array))
+        if total <= 0.0:
+            return uniform
+        return [float(value / total) for value in mix_array]
+
+    def _summarize_population(self) -> Dict[str, float]:
+        makespans = np.asarray(
+            [ind.fitness.get("makespan", math.inf) for ind in self.population],
+            dtype=float,
+        )
+        finite_mask = np.isfinite(makespans)
+        feasible_ratio = float(np.mean(finite_mask)) if makespans.size else 0.0
+        finite_values = makespans[finite_mask]
+        if finite_values.size == 0:
+            finite_values = np.array([math.inf], dtype=float)
+        best = float(np.min(finite_values))
+        mean = float(np.mean(finite_values))
+        std = float(np.std(finite_values))
+        return {
+            "best_makespan": best,
+            "mean_makespan": mean,
+            "std_makespan": std,
+            "infeasible_ratio": float(1.0 - feasible_ratio),
+            "diversity": self._estimate_population_diversity(),
+        }
+
+    def _estimate_population_diversity(self, sample_size: int = 6) -> float:
+        if len(self.population) <= 1:
+            return 0.0
+        sample_count = min(sample_size, len(self.population))
+        sampled = self.population[:sample_count]
+        best = sampled[0]
+        distances = [best.dissimilarity(ind) for ind in sampled[1:]]
+        if not distances:
+            return 0.0
+        return float(sum(distances) / len(distances))
+
+    def _build_rl_state(
+        self,
+        population_stats: Dict[str, float],
+        generation: int,
+        last_progress: int,
+        mutation_probability: float,
+        population_size: int,
+        offspring_amount: int,
+        restarts: int,
+        restart_flag: bool,
+        reward_history: Sequence[float],
+        mix_history: Sequence[Sequence[float]],
+        improvement_history: Sequence[float],
+    ) -> np.ndarray:
+        scale = max(1.0, population_stats["best_makespan"]) if np.isfinite(population_stats["best_makespan"]) else 1.0
+        max_wait = max(1, self.config.restart_generations)
+        max_mutation = max(self.config.max_mutation_probability, 1e-6)
+        base_population = max(1, self.config.population_size)
+        base_offspring = max(1, self.config.offspring_amount)
+        max_diversity = max(1.0, self.config.max_dissimilarity)
+
+        state = [
+            population_stats["best_makespan"] / scale if np.isfinite(population_stats["best_makespan"]) else 1.0,
+            population_stats["mean_makespan"] / scale if np.isfinite(population_stats["mean_makespan"]) else 1.0,
+            population_stats["std_makespan"] / scale if np.isfinite(population_stats["std_makespan"]) else 0.0,
+            min(1.0, max(0.0, (generation - last_progress) / max_wait)),
+            min(1.0, max(0.0, mutation_probability / max_mutation)),
+            population_size / base_population,
+            offspring_amount / base_offspring,
+            float(restarts) / max(1, max_wait),
+            min(1.0, population_stats["diversity"] / max_diversity),
+            min(1.0, max(0.0, population_stats["infeasible_ratio"])),
+            1.0 if restart_flag else 0.0,
+        ]
+
+        history_length = max(0, self.config.rl_history_length)
+        reward_tail = list(reward_history)[-history_length:]
+        reward_tail = [float(np.tanh(value)) for value in reward_tail]
+        reward_tail += [0.0] * (history_length - len(reward_tail))
+        state.extend(reward_tail)
+
+        mix_tail = list(mix_history)[-history_length:]
+        for mix in mix_tail:
+            normalized_mix = self._normalize_mutation_mix(mix)
+            state.extend(normalized_mix)
+        missing_mix_entries = history_length - len(mix_tail)
+        for _ in range(missing_mix_entries):
+            state.extend([1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0])
+
+        improvement_tail = list(improvement_history)[-history_length:]
+        improvement_tail = [float(np.tanh(value)) for value in improvement_tail]
+        improvement_tail += [0.0] * (history_length - len(improvement_tail))
+        state.extend(improvement_tail)
+
+        return np.nan_to_num(np.asarray(state, dtype=float), nan=0.0, posinf=1.0, neginf=-1.0)
+
+    def _compute_rl_reward(
+        self,
+        prev_stats: Dict[str, float],
+        new_stats: Dict[str, float],
+        operator_stats: Dict[str, int],
+        generations_since_improvement: int,
+        global_best_before: float,
+        global_best_after: float,
+    ) -> float:
+        weights = self.config.rl_reward_weights
+        best_scale = max(1.0, global_best_before if np.isfinite(global_best_before) else 1.0)
+        mean_scale = max(1.0, prev_stats["mean_makespan"] if np.isfinite(prev_stats["mean_makespan"]) else best_scale)
+        diversity_scale = max(1.0, self.config.max_dissimilarity)
+
+        global_improvement = 0.0
+        if np.isfinite(global_best_before) and np.isfinite(global_best_after):
+            global_improvement = (global_best_before - global_best_after) / best_scale
+
+        mean_improvement = 0.0
+        if np.isfinite(prev_stats["mean_makespan"]) and np.isfinite(new_stats["mean_makespan"]):
+            mean_improvement = (prev_stats["mean_makespan"] - new_stats["mean_makespan"]) / mean_scale
+
+        diversity_bonus = max(0.0, new_stats["diversity"]) / diversity_scale
+        infeasible_penalty = min(1.0, max(0.0, new_stats["infeasible_ratio"]))
+        stagnation_penalty = min(1.0, generations_since_improvement / max(1, self.config.restart_generations))
+        no_op_ratio = operator_stats.get("no_op", 0) / max(1, operator_stats.get("events", 0))
+
+        reward = (
+            weights.get("global_best_improvement", 0.0) * global_improvement
+            + weights.get("population_mean_improvement", 0.0) * mean_improvement
+            + weights.get("diversity_bonus", 0.0) * diversity_bonus
+            - weights.get("infeasible_penalty", 0.0) * infeasible_penalty
+            - weights.get("stagnation_penalty", 0.0) * stagnation_penalty
+            - 0.05 * no_op_ratio
+        )
+        return float(np.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0))
+
+    def _rl_state_size(self) -> int:
+        history_length = max(0, self.config.rl_history_length)
+        base_features = 11
+        return base_features + history_length + (history_length * 3) + history_length
 
     @staticmethod
     def _get_all_equal(best: WFJSSPIndividual, individuals: List[WFJSSPIndividual]) -> List[WFJSSPIndividual]:
@@ -691,6 +956,31 @@ class WFJSSPGA:
         self.function_evaluations = 0
         start_time = time.time()
         history = []
+        reward_history: deque[float] = deque(maxlen=max(0, self.config.rl_history_length))
+        mix_history: deque[Sequence[float]] = deque(maxlen=max(0, self.config.rl_history_length))
+        improvement_history: deque[float] = deque(maxlen=max(0, self.config.rl_history_length))
+        rl_agent: Optional[RLMutationAgent] = None
+        rl_uniform_mix = [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]
+        current_mix = rl_uniform_mix[:]
+        current_reward = 0.0
+        current_value_estimate: Optional[float] = None
+        current_operator_stats = {"sequence": 0, "machine": 0, "worker": 0, "events": 0, "no_op": 0}
+
+        if self.config.enable_rl_mutation_control:
+            rl_agent = RLMutationAgent(
+                RLMutationAgentConfig(
+                    state_size=self._rl_state_size(),
+                    hidden_size=self.config.rl_hidden_size,
+                    learning_rate=self.config.rl_learning_rate,
+                    gamma=self.config.rl_gamma,
+                    gae_lambda=self.config.rl_lambda,
+                    clip_epsilon=self.config.rl_clip_epsilon,
+                    entropy_coef=self.config.rl_entropy_coef,
+                    value_coef=self.config.rl_value_coef,
+                    seed=self.config.rl_seed,
+                )
+            )
+            rl_agent.reset_episode()
 
         def record_history() -> None:
             history.append(
@@ -704,6 +994,13 @@ class WFJSSPGA:
                     "offspring_amount": int(offspring_amount),
                     "restarts": int(restarts),
                     "runtime_s": float(time.time() - start_time),
+                    "rl_enabled": bool(self.config.enable_rl_mutation_control),
+                    "mutation_mix": list(current_mix),
+                    "rl_reward": float(current_reward),
+                    "rl_value_estimate": None if current_value_estimate is None else float(current_value_estimate),
+                    "seq_mutations": int(current_operator_stats.get("sequence", 0)),
+                    "machine_mutations": int(current_operator_stats.get("machine", 0)),
+                    "worker_mutations": int(current_operator_stats.get("worker", 0)),
                 }
             )
 
@@ -725,7 +1022,15 @@ class WFJSSPGA:
                     mutation_probability, generation, last_progress, max_wait, max_mutation_probability
                 )
 
+            restart_happened = False
             if do_restart and mutation_probability > max_mutation_probability:
+                if rl_agent is not None and rl_agent.has_pending_transitions():
+                    rl_agent.end_episode()
+                    rl_agent.update()
+                    rl_agent.reset_episode()
+                    reward_history.clear()
+                    mix_history.clear()
+                    improvement_history.clear()
                 max_population_size = 400
                 max_offspring_amount = max_population_size * 4
                 population_size = min(max_population_size, int(self.config.population_size_growth_rate * population_size))
@@ -737,11 +1042,55 @@ class WFJSSPGA:
                 mutation_probability = float(self.config.mutation_probability)
                 last_progress = generation
                 restarts += 1
+                restart_happened = True
 
-            offspring = self.create_offspring(offspring_amount, tournament_size, mutation_probability)
+            prev_stats = self._summarize_population()
+            global_best_before = float(overall_best[0].fitness["makespan"])
+            rl_state = self._build_rl_state(
+                prev_stats,
+                generation,
+                last_progress,
+                mutation_probability,
+                population_size,
+                offspring_amount,
+                restarts,
+                restart_happened,
+                reward_history,
+                mix_history,
+                improvement_history,
+            )
+
+            rl_active = (
+                rl_agent is not None
+                and generation >= max(0, self.config.rl_warmup_generations)
+            )
+            current_mix = rl_uniform_mix[:]
+            current_value_estimate = None
+            current_reward = 0.0
+
+            if rl_active:
+                try:
+                    proposed_mix, aux = rl_agent.act(rl_state)
+                    current_mix = self._normalize_mutation_mix(proposed_mix)
+                    current_value_estimate = float(aux.get("value", 0.0))
+                    current_logprob = float(aux.get("logprob", 0.0))
+                except Exception:
+                    current_mix = rl_uniform_mix[:]
+                    current_value_estimate = 0.0
+                    current_logprob = 0.0
+            else:
+                current_logprob = 0.0
+
+            offspring = self.create_offspring(
+                offspring_amount,
+                tournament_size,
+                mutation_probability,
+                mutation_mix=current_mix if rl_active else None,
+            )
             pool = offspring + self.population[:elitism]
             pool.sort(key=lambda x: x.fitness["makespan"])
             self.population = pool[:population_size]
+            current_operator_stats = dict(self.last_mutation_operator_counts)
 
             if not current_best or self.population[0].fitness["makespan"] < current_best[0].fitness["makespan"]:
                 current_best = self._get_all_equal(self.population[0], self.population) if keep_multiple else [self.population[0]]
@@ -768,8 +1117,41 @@ class WFJSSPGA:
                             overall_best.append(ind)
                             known_best.add(id(ind))
 
+            new_stats = self._summarize_population()
+            global_best_after = float(overall_best[0].fitness["makespan"])
+            improvement_value = 0.0
+            if np.isfinite(global_best_before) and np.isfinite(global_best_after):
+                improvement_value = (global_best_before - global_best_after) / max(1.0, global_best_before)
+            current_reward = self._compute_rl_reward(
+                prev_stats,
+                new_stats,
+                current_operator_stats,
+                max(0, generation - last_progress),
+                global_best_before,
+                global_best_after,
+            )
+            reward_history.append(current_reward)
+            mix_history.append(current_mix)
+            improvement_history.append(improvement_value)
+
+            if rl_active and rl_agent is not None:
+                rl_agent.store_transition(
+                    rl_state,
+                    current_mix,
+                    current_reward,
+                    current_value_estimate if current_value_estimate is not None else 0.0,
+                    current_logprob,
+                    False,
+                )
+                if (generation + 1) % max(1, self.config.rl_update_interval) == 0:
+                    rl_agent.update()
+
             generation += 1
             record_history()
+
+        if rl_agent is not None and rl_agent.has_pending_transitions():
+            rl_agent.end_episode()
+            rl_agent.update()
 
         return {
             "best": overall_best[0],
