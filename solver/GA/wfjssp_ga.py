@@ -553,6 +553,10 @@ class WFJSSPGA:
     Deutsch:
     Hauptklasse des genetischen Algorithmus zur Lösung des Flexible Job Shop Scheduling Problems mit Workern (FJSSP-W). Verwaltet die Population, Evaluierung und Evolutionsprozess.
     """
+    DEFAULT_TIME_LIMIT_S = 20 * 60
+    DEFAULT_MAX_FUNCTION_EVALUATIONS = 5_000_000
+    DEFAULT_PROGRESS_INTERVAL_EVALUATIONS = 50_000
+
     def __init__(self, config: WorkerGAConfig) -> None:
         """
         Englisch:
@@ -575,6 +579,30 @@ class WFJSSPGA:
             "events": 0,
             "no_op": 0,
         }
+        self._run_start_time: Optional[float] = None
+        self._next_progress_evaluation: Optional[int] = None
+        self._progress_interval_evaluations: Optional[int] = None
+
+    def _maybe_print_progress(self) -> None:
+        if (
+            self._run_start_time is None
+            or self._next_progress_evaluation is None
+            or self._progress_interval_evaluations is None
+        ):
+            return
+
+        while self.function_evaluations >= self._next_progress_evaluation:
+            runtime_s = time.time() - self._run_start_time
+            print(
+                f"Progress: {self.function_evaluations:,} Funktionsevaluierungen, "
+                f"Laufzeit {runtime_s:.2f}s",
+                flush=True,
+            )
+            self._next_progress_evaluation += self._progress_interval_evaluations
+
+    def _count_function_evaluation(self, amount: int = 1) -> None:
+        self.function_evaluations += amount
+        self._maybe_print_progress()
 
     def evaluate(self, ind: WFJSSPIndividual) -> float:
         """
@@ -600,7 +628,7 @@ class WFJSSPGA:
         except Exception:
             # Invalid solution
             ind.fitness["makespan"] = math.inf
-            self.function_evaluations += 1
+            self._count_function_evaluation()
             return math.inf
 
         if self.config.use_stochastic_evaluation:
@@ -616,7 +644,7 @@ class WFJSSPGA:
                 self.config.job_sequence,
             ):
                 ind.fitness["makespan"] = math.inf
-                self.function_evaluations += 1
+                self._count_function_evaluation()
                 return math.inf
             try:
                 results, robust_makespan, robust_makespan_stdev, R = run_n_simulations(
@@ -632,20 +660,20 @@ class WFJSSPGA:
                 )
             except (RecursionError, Exception):
                 ind.fitness["makespan"] = math.inf
-                self.function_evaluations += 1
+                self._count_function_evaluation()
                 return math.inf
             ind.fitness["makespan"] = robust_makespan
             ind.fitness["robust_makespan_stdev"] = robust_makespan_stdev
             ind.fitness["R"] = R
-            self.function_evaluations += 1
+            self._count_function_evaluation(len(results))
             return robust_makespan
         else:
             makespan_val = makespan(start_times, machine_assignments, worker_assignments, self.config.durations)
             ind.fitness["makespan"] = makespan_val
-            self.function_evaluations += 1
+            self._count_function_evaluation()
             return makespan_val
 
-    def create_population(self, population_size: int) -> None:
+    def create_population(self, population_size: int, stop_condition=None) -> None:
         """
         Englisch:
         Creates an initial population of individuals.
@@ -658,6 +686,8 @@ class WFJSSPGA:
         """
         self.population = []
         for _ in range(population_size):
+            if stop_condition is not None and stop_condition():
+                break
             ind = WFJSSPIndividual.from_population(self.config, self.rng, self.population)
             self.evaluate(ind)
             self.population.append(ind)
@@ -674,8 +704,11 @@ class WFJSSPGA:
         Returns:
             WFJSSPIndividual: The selected individual.
         """
+        if not self.population:
+            raise RuntimeError("Cannot select from an empty population.")
         if tournament_size == 0:
             tournament_size = max(1, len(self.population) // 10)
+        tournament_size = min(max(1, tournament_size), len(self.population))
         participants = self.rng.sample(range(len(self.population)), k=tournament_size)
         winner = self.population[participants[0]]
         for idx in participants[1:]:
@@ -709,6 +742,7 @@ class WFJSSPGA:
         tournament_size: int,
         mutation_probability: float,
         mutation_mix: Optional[Sequence[float]] = None,
+        stop_condition=None,
     ) -> List[WFJSSPIndividual]:
         """
         Englisch:
@@ -720,12 +754,15 @@ class WFJSSPGA:
             tournament_size (int): Size of the tournament for selection.
             mutation_probability (float): Probability of mutation.
             mutation_mix (Optional[Sequence[float]]): Optional weighted mutation mix.
+            stop_condition: Optional callable that stops offspring creation early.
         Returns:
             List[WFJSSPIndividual]: List of offspring individuals.
         """
         offspring: List[WFJSSPIndividual] = []
         operator_counts = {"sequence": 0, "machine": 0, "worker": 0, "events": 0, "no_op": 0}
         for _ in range(offspring_amount):
+            if stop_condition is not None and stop_condition():
+                break
             child = self.recombine(tournament_size)
             if mutation_mix is None:
                 child.mutate(mutation_probability)
@@ -917,10 +954,11 @@ class WFJSSPGA:
 
     def run(
         self,
-        max_generations: int = 1000,
-        time_limit_s: Optional[float] = None,
+        max_generations: Optional[int] = None,
+        time_limit_s: Optional[float] = DEFAULT_TIME_LIMIT_S,
         target_fitness: Optional[float] = None,
-        max_function_evaluations: Optional[int] = None,
+        max_function_evaluations: Optional[int] = DEFAULT_MAX_FUNCTION_EVALUATIONS,
+        progress_interval_evaluations: Optional[int] = DEFAULT_PROGRESS_INTERVAL_EVALUATIONS,
         keep_multiple: bool = True,
         do_restart: bool = True,
     ) -> dict:
@@ -930,16 +968,36 @@ class WFJSSPGA:
         Deutsch:
         Führt den genetischen Algorithmus aus, bis eines der Stoppkriterien erfüllt ist.
         Args:
-            max_generations (int, optional): Maximum number of generations. Defaults to 1000.
-            time_limit_s (Optional[float], optional): Time limit in seconds. Defaults to None.
+            max_generations (Optional[int], optional): Maximum number of generations. Defaults to None.
+            time_limit_s (Optional[float], optional): Time limit in seconds. Defaults to 1200.
             target_fitness (Optional[float], optional): Target fitness value. Defaults to None.
-            max_function_evaluations (Optional[int], optional): Maximum function evaluations. Defaults to None.
+            max_function_evaluations (Optional[int], optional): Maximum function evaluations. Defaults to 5_000_000.
+            progress_interval_evaluations (Optional[int], optional): Print progress after this many function evaluations. Defaults to 50_000.
             keep_multiple (bool, optional): Whether to keep multiple best individuals. Defaults to True.
             do_restart (bool, optional): Whether to perform restarts. Defaults to True.
         Returns:
             dict: Results including best individual, population, etc.
         """
-        self.create_population(self.config.population_size)
+        self.function_evaluations = 0
+        start_time = time.time()
+        self._run_start_time = start_time
+        self._progress_interval_evaluations = progress_interval_evaluations
+        self._next_progress_evaluation = (
+            progress_interval_evaluations
+            if progress_interval_evaluations is not None and progress_interval_evaluations > 0
+            else None
+        )
+
+        def stop_limit_reached() -> bool:
+            if time_limit_s is not None and (time.time() - start_time) >= time_limit_s:
+                return True
+            if max_function_evaluations is not None and self.function_evaluations >= max_function_evaluations:
+                return True
+            return False
+
+        self.create_population(self.config.population_size, stop_condition=stop_limit_reached)
+        if not self.population:
+            raise RuntimeError("No individual could be evaluated before a stop limit was reached.")
         population_size = self.config.population_size
         offspring_amount = self.config.offspring_amount
         tournament_size = self.config.tournament_size
@@ -953,8 +1011,6 @@ class WFJSSPGA:
         last_progress = 0
         generation = 0
         restarts = 0
-        self.function_evaluations = 0
-        start_time = time.time()
         history = []
         reward_history: deque[float] = deque(maxlen=max(0, self.config.rl_history_length))
         mix_history: deque[Sequence[float]] = deque(maxlen=max(0, self.config.rl_history_length))
@@ -1008,11 +1064,9 @@ class WFJSSPGA:
 
         while True:
             best_fitness = overall_best[0].fitness["makespan"]
-            if generation >= max_generations:
+            if max_generations is not None and generation >= max_generations:
                 break
-            if time_limit_s is not None and (time.time() - start_time) >= time_limit_s:
-                break
-            if max_function_evaluations is not None and self.function_evaluations >= max_function_evaluations:
+            if stop_limit_reached():
                 break
             if target_fitness is not None and best_fitness <= target_fitness:
                 break
@@ -1038,11 +1092,15 @@ class WFJSSPGA:
                 elitism = max(0, int(population_size * self.config.max_elitism_rate * self.config.duration_variety))
                 tournament_size = max(1, int(population_size * self.config.max_tournament_rate * self.config.duration_variety))
                 current_best = []
-                self.create_population(population_size)
+                self.create_population(population_size, stop_condition=stop_limit_reached)
+                if not self.population:
+                    break
                 mutation_probability = float(self.config.mutation_probability)
                 last_progress = generation
                 restarts += 1
                 restart_happened = True
+                if stop_limit_reached():
+                    break
 
             prev_stats = self._summarize_population()
             global_best_before = float(overall_best[0].fitness["makespan"])
@@ -1086,8 +1144,11 @@ class WFJSSPGA:
                 tournament_size,
                 mutation_probability,
                 mutation_mix=current_mix if rl_active else None,
+                stop_condition=stop_limit_reached,
             )
             pool = offspring + self.population[:elitism]
+            if not pool:
+                break
             pool.sort(key=lambda x: x.fitness["makespan"])
             self.population = pool[:population_size]
             current_operator_stats = dict(self.last_mutation_operator_counts)
