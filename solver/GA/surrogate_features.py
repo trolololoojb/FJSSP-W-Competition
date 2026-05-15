@@ -84,13 +84,18 @@ def _uncertainty_for_worker(uncertainty_parameters: Any, worker: Any) -> float:
                     if key in value:
                         return _finite_float(value[key])
                 return 0.0
+            if isinstance(value, (list, tuple, np.ndarray)):
+                return _finite_float(np.mean(np.abs(np.asarray(value, dtype=float))))
             return _finite_float(value)
         return 0.0
 
     try:
-        return _finite_float(uncertainty_parameters[worker])
+        value = uncertainty_parameters[worker]
     except (TypeError, KeyError, IndexError):
         return 0.0
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return _finite_float(np.mean(np.abs(np.asarray(value, dtype=float))))
+    return _finite_float(value)
 
 
 def featurize_candidate(
@@ -104,7 +109,6 @@ def featurize_candidate(
 ) -> dict:
     """Return a flat dict of numeric features for one decoded candidate."""
 
-    operations = _as_list(sequence)
     machines = _as_list(machine_assignments)
     workers = _as_list(worker_assignments)
     starts = _as_list(start_times)
@@ -115,12 +119,11 @@ def featurize_candidate(
     worker_loads: dict[Any, float] = {}
     completion_times: list[float] = []
 
-    for idx, operation in enumerate(operations):
-        if idx >= len(machines) or idx >= len(workers):
+    for op_idx, machine in enumerate(machines):
+        if op_idx >= len(workers):
             continue
-        machine = machines[idx]
-        worker = workers[idx]
-        duration = _duration_for_assignment(durations, operation, machine, worker)
+        worker = workers[op_idx]
+        duration = _duration_for_assignment(durations, op_idx, machine, worker)
         if duration <= 0.0:
             continue
 
@@ -128,7 +131,7 @@ def featurize_candidate(
         machine_loads[machine] = machine_loads.get(machine, 0.0) + duration
         worker_loads[worker] = worker_loads.get(worker, 0.0) + duration
 
-        start = _finite_float(starts[idx]) if idx < len(starts) else 0.0
+        start = _finite_float(starts[op_idx]) if op_idx < len(starts) else 0.0
         completion_times.append(start + duration)
 
     mean_duration, std_duration, min_duration, max_duration = _safe_stats(op_durations)
@@ -138,7 +141,7 @@ def featurize_candidate(
     mean_worker_load, std_worker_load, _, max_worker_load = _safe_stats(worker_load_values)
 
     features = {
-        "n_operations": _finite_float(len(operations)),
+        "n_operations": _finite_float(len(machines)),
         "n_machines": _finite_float(len(set(machines))),
         "n_workers": _finite_float(len(set(workers))),
         "n_jobs": _finite_float(len(set(jobs))),

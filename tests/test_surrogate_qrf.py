@@ -7,7 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from solver.GA.surrogate_features import feature_dicts_to_matrix
+from solver.GA.surrogate_features import feature_dicts_to_matrix, featurize_candidate
 from solver.GA.surrogate_qrf import QRFSurrogate, SurrogateSample
 
 
@@ -56,6 +56,47 @@ def test_feature_dicts_to_matrix_stable_column_order():
 
     assert fixed_names == ["b", "missing", "a"]
     assert X_fixed.tolist() == [[2.0, 0.0, 1.0]]
+
+
+def test_featurize_candidate_uses_operation_index_for_durations():
+    features = featurize_candidate(
+        sequence=[1, 0, 1],
+        machine_assignments=[0, 1, 0],
+        worker_assignments=[1, 0, 1],
+        start_times=[0.0, 5.0, 10.0],
+        durations=[
+            [[100.0, 3.0], [100.0, 100.0]],
+            [[100.0, 100.0], [7.0, 100.0]],
+            [[100.0, 11.0], [100.0, 100.0]],
+        ],
+        job_sequence=[0, 0, 1],
+    )
+
+    assert features["n_operations"] == 3.0
+    assert features["mean_operation_duration"] == pytest.approx(7.0)
+    assert features["deterministic_makespan"] == pytest.approx(21.0)
+
+
+def test_featurize_candidate_summarizes_vector_worker_uncertainty():
+    features = featurize_candidate(
+        sequence=[0, 1],
+        machine_assignments=[0, 0],
+        worker_assignments=[0, 1],
+        start_times=[0.0, 3.0],
+        durations=[
+            [[3.0, 100.0]],
+            [[100.0, 5.0]],
+        ],
+        job_sequence=[0, 1],
+        uncertainty_parameters={
+            0: [1.0, -3.0, 5.0],
+            1: [2.0, -4.0, 6.0],
+        },
+    )
+
+    assert features["mean_worker_uncertainty"] == pytest.approx(3.5)
+    assert features["max_worker_uncertainty"] == pytest.approx(4.0)
+    assert features["weighted_mean_worker_uncertainty"] == pytest.approx(3.625)
 
 
 def test_is_ready_false_before_enough_samples():

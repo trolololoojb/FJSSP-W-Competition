@@ -12,6 +12,8 @@ import numpy as np
 from util.evaluation import translate, makespan
 from util.graph import run_n_simulations
 from solver.GA.rl_mutation_agent import RLMutationAgent, RLMutationAgentConfig
+from solver.GA.surrogate_features import featurize_candidate
+from solver.GA.surrogate_qrf import QRFSurrogate, SurrogateSample
 
 
 def is_simulatable_schedule(
@@ -125,6 +127,17 @@ class WorkerGAConfig:
     use_stochastic_evaluation: bool = False # whether to use stochastic evaluation with simulations to estimate robust makespan, instead of deterministic evaluation. If True, the fitness will include "makespan" as the estimated robust makespan, "robust_makespan_stdev" as the standard deviation of the makespan across simulations, and "R" as the robustness measure (e.g. the 95th percentile of the makespan distribution). The translate function will be used to get start times and assignments, and then run_n_simulations will be called to perform the stochastic evaluation.
     uncertainty_parameters: Optional[List[List[float]]] = None # optional parameters for the uncertainty model used in stochastic evaluation, expected shape [n_ops][n_machines], where each entry is a parameter (e.g. standard deviation) for the processing time distribution of that operation on that machine. If None, no uncertainty will be applied and the deterministic durations will be used in the simulations.
     n_simulations: int = 100 # number of simulations to run for stochastic evaluation when use_stochastic_evaluation is True
+    use_surrogate_evaluation: bool = False
+    surrogate_warmup_real_candidates: int = 300
+    surrogate_top_fraction: float = 0.02
+    surrogate_uncertain_fraction: float = 0.005
+    surrogate_random_fraction: float = 0.005
+    surrogate_min_real_per_generation: int = 5
+    surrogate_retrain_interval_real_candidates: int = 50
+    surrogate_n_estimators: int = 300
+    surrogate_min_samples_leaf: int = 3
+    surrogate_max_features: str = "sqrt"
+    surrogate_candidate_id_start: int = 0
     seed: Optional[int] = None # random seed for reproducibility
     enable_rl_mutation_control: bool = False
     rl_update_interval: int = 16
@@ -582,6 +595,25 @@ class WFJSSPGA:
         self._run_start_time: Optional[float] = None
         self._next_progress_evaluation: Optional[int] = None
         self._progress_interval_evaluations: Optional[int] = None
+        self.surrogate = None
+        if self.config.use_surrogate_evaluation and self.config.use_stochastic_evaluation:
+            self.surrogate = QRFSurrogate(
+                min_samples_before_fit=self.config.surrogate_warmup_real_candidates,
+                n_estimators=self.config.surrogate_n_estimators,
+                min_samples_leaf=self.config.surrogate_min_samples_leaf,
+                max_features=self.config.surrogate_max_features,
+                random_state=self.config.seed,
+            )
+        self._next_candidate_id = int(self.config.surrogate_candidate_id_start)
+        self.surrogate_predictions = 0
+        self.surrogate_real_candidate_evaluations = 0
+        self.surrogate_since_last_fit = 0
+        self.surrogate_fit_count = 0
+
+    def _new_candidate_id(self) -> int:
+        candidate_id = self._next_candidate_id
+        self._next_candidate_id += 1
+        return candidate_id
 
     def _maybe_print_progress(self) -> None:
         if (
@@ -604,7 +636,55 @@ class WFJSSPGA:
         self.function_evaluations += amount
         self._maybe_print_progress()
 
-    def evaluate(self, ind: WFJSSPIndividual) -> float:
+    def _decode_individual(self, ind: WFJSSPIndividual):
+        if not ind.feasible:
+            return None
+
+        try:
+            start_times, machine_assignments, worker_assignments = translate(
+                ind.sequence, ind.assignments, ind.workers, self.config.durations
+            )
+        except Exception:
+            return None
+
+        end_times = [
+            start_times[i] + self.config.durations[i][machine_assignments[i]][worker_assignments[i]]
+            for i in range(len(start_times))
+        ]
+        if not is_simulatable_schedule(
+            start_times,
+            end_times,
+            machine_assignments,
+            worker_assignments,
+            self.config.job_sequence,
+        ):
+            return None
+
+        deterministic_makespan = makespan(
+            start_times,
+            machine_assignments,
+            worker_assignments,
+            self.config.durations,
+        )
+        features = featurize_candidate(
+            sequence=ind.sequence,
+            machine_assignments=machine_assignments,
+            worker_assignments=worker_assignments,
+            start_times=start_times,
+            durations=self.config.durations,
+            job_sequence=self.config.job_sequence,
+            uncertainty_parameters=self.config.uncertainty_parameters,
+        )
+        return {
+            "start_times": start_times,
+            "end_times": end_times,
+            "machine_assignments": machine_assignments,
+            "worker_assignments": worker_assignments,
+            "deterministic_makespan": deterministic_makespan,
+            "features": features,
+        }
+
+    def evaluate_real(self, ind: WFJSSPIndividual, candidate_id: int | None = None) -> float:
         """
         Englisch:
         Evaluates the fitness of an individual by simulating the scheduling and calculating the makespan.
@@ -615,43 +695,20 @@ class WFJSSPGA:
         Returns:
             float: The makespan value.
         """
-        
-        # Wenn das Individuum als unzulässig markiert ist, setzen wir den Fitnesswert auf unendlich und geben unendlich zurück
-        if not ind.feasible:
+        decoded = self._decode_individual(ind)
+        if decoded is None:
             ind.fitness["makespan"] = math.inf
-            return math.inf
-
-        try:
-            start_times, machine_assignments, worker_assignments = translate(
-                ind.sequence, ind.assignments, ind.workers, self.config.durations
-            )
-        except Exception:
-            # Invalid solution
-            ind.fitness["makespan"] = math.inf
-            self._count_function_evaluation()
+            ind.fitness["fitness_source"] = "invalid"
+            ind.fitness["candidate_id"] = candidate_id
             return math.inf
 
         if self.config.use_stochastic_evaluation:
-            end_times = [
-                start_times[i] + self.config.durations[i][machine_assignments[i]][worker_assignments[i]]
-                for i in range(len(start_times))
-            ]
-            if not is_simulatable_schedule(
-                start_times,
-                end_times,
-                machine_assignments,
-                worker_assignments,
-                self.config.job_sequence,
-            ):
-                ind.fitness["makespan"] = math.inf
-                self._count_function_evaluation()
-                return math.inf
             try:
                 results, robust_makespan, robust_makespan_stdev, R = run_n_simulations(
-                    start_times,
-                    end_times,
-                    machine_assignments,
-                    worker_assignments,
+                    decoded["start_times"],
+                    decoded["end_times"],
+                    decoded["machine_assignments"],
+                    decoded["worker_assignments"],
                     self.config.job_sequence,
                     self.config.durations,
                     self.config.uncertainty_parameters,
@@ -660,18 +717,119 @@ class WFJSSPGA:
                 )
             except (RecursionError, Exception):
                 ind.fitness["makespan"] = math.inf
-                self._count_function_evaluation()
+                ind.fitness["fitness_source"] = "invalid"
+                ind.fitness["candidate_id"] = candidate_id
                 return math.inf
             ind.fitness["makespan"] = robust_makespan
             ind.fitness["robust_makespan_stdev"] = robust_makespan_stdev
             ind.fitness["R"] = R
+            ind.fitness["fitness_source"] = "real"
+            ind.fitness["candidate_id"] = candidate_id
             self._count_function_evaluation(len(results))
+            if self.surrogate is not None:
+                self.surrogate.add_sample(
+                    SurrogateSample(
+                        candidate_id=-1 if candidate_id is None else int(candidate_id),
+                        features=decoded["features"],
+                        deterministic_makespan=decoded["deterministic_makespan"],
+                        robust_makespan=float(robust_makespan),
+                        robust_makespan_stdev=float(robust_makespan_stdev),
+                        R=float(R),
+                        n_simulations=len(results),
+                        source="real",
+                    )
+                )
+                self.surrogate_real_candidate_evaluations += 1
+                self.surrogate_since_last_fit += 1
             return robust_makespan
         else:
-            makespan_val = makespan(start_times, machine_assignments, worker_assignments, self.config.durations)
+            makespan_val = decoded["deterministic_makespan"]
             ind.fitness["makespan"] = makespan_val
+            ind.fitness["fitness_source"] = "real"
+            ind.fitness["candidate_id"] = candidate_id
             self._count_function_evaluation()
             return makespan_val
+
+    def evaluate(self, ind: WFJSSPIndividual) -> float:
+        return self.evaluate_real(ind, candidate_id=self._new_candidate_id())
+
+    def evaluate_batch(self, individuals: List[WFJSSPIndividual]) -> None:
+        if not individuals:
+            return
+
+        surrogate_active = (
+            self.config.use_surrogate_evaluation
+            and self.config.use_stochastic_evaluation
+            and self.surrogate is not None
+        )
+        if not surrogate_active:
+            for ind in individuals:
+                self.evaluate_real(ind, candidate_id=self._new_candidate_id())
+            return
+
+        if not self.surrogate.is_ready():
+            for ind in individuals:
+                self.evaluate_real(ind, candidate_id=self._new_candidate_id())
+            if self.surrogate.is_ready() and self.surrogate.fit():
+                self.surrogate_fit_count += 1
+                self.surrogate_since_last_fit = 0
+            return
+
+        candidate_records = []
+        for ind in individuals:
+            candidate_id = self._new_candidate_id()
+            decoded = self._decode_individual(ind)
+            if decoded is None:
+                ind.fitness["makespan"] = math.inf
+                ind.fitness["fitness_source"] = "invalid"
+                ind.fitness["candidate_id"] = candidate_id
+                continue
+            candidate_records.append(
+                {
+                    "candidate_id": candidate_id,
+                    "individual": ind,
+                    "features": decoded["features"],
+                    "deterministic_makespan": decoded["deterministic_makespan"],
+                }
+            )
+
+        if not candidate_records:
+            return
+
+        predictions = self.surrogate.predict_many(candidate_records)
+        selection_seed = self.rng.randrange(0, 2**32)
+        selected_ids = self.surrogate.select_for_real_evaluation(
+            predictions,
+            top_fraction=self.config.surrogate_top_fraction,
+            uncertain_fraction=self.config.surrogate_uncertain_fraction,
+            random_fraction=self.config.surrogate_random_fraction,
+            min_count=self.config.surrogate_min_real_per_generation,
+            rng=selection_seed,
+        )
+        records_by_id = {record["candidate_id"]: record for record in candidate_records}
+
+        for prediction in predictions:
+            record = records_by_id[prediction.candidate_id]
+            ind = record["individual"]
+            if prediction.candidate_id in selected_ids:
+                self.evaluate_real(ind, candidate_id=prediction.candidate_id)
+                continue
+
+            ind.fitness["makespan"] = prediction.score
+            ind.fitness["fitness_source"] = "surrogate"
+            ind.fitness["candidate_id"] = prediction.candidate_id
+            ind.fitness["surrogate_mean_R"] = prediction.mean_R
+            ind.fitness["surrogate_q10_R"] = prediction.q10_R
+            ind.fitness["surrogate_q50_R"] = prediction.q50_R
+            ind.fitness["surrogate_q90_R"] = prediction.q90_R
+            ind.fitness["surrogate_uncertainty_R"] = prediction.uncertainty_R
+            ind.fitness["surrogate_predicted_robust_makespan"] = prediction.predicted_robust_makespan
+            self.surrogate_predictions += 1
+
+        if self.surrogate_since_last_fit >= self.config.surrogate_retrain_interval_real_candidates:
+            if self.surrogate.fit():
+                self.surrogate_fit_count += 1
+                self.surrogate_since_last_fit = 0
 
     def create_population(self, population_size: int, stop_condition=None) -> None:
         """
@@ -689,8 +847,8 @@ class WFJSSPGA:
             if stop_condition is not None and stop_condition():
                 break
             ind = WFJSSPIndividual.from_population(self.config, self.rng, self.population)
-            self.evaluate(ind)
             self.population.append(ind)
+        self.evaluate_batch(self.population)
         self.population.sort(key=lambda x: x.fitness["makespan"])
 
     def tournament_selection(self, tournament_size: int) -> WFJSSPIndividual:
@@ -770,8 +928,8 @@ class WFJSSPGA:
                 child_counts = child.mutate_weighted(mutation_probability, mutation_mix)
                 for key, value in child_counts.items():
                     operator_counts[key] = operator_counts.get(key, 0) + int(value)
-            self.evaluate(child)
             offspring.append(child)
+        self.evaluate_batch(offspring)
         self.last_mutation_operator_counts = operator_counts
         return offspring
 
@@ -935,6 +1093,18 @@ class WFJSSPGA:
         return [x for x in individuals if x.fitness["makespan"] == best.fitness["makespan"]]
 
     @staticmethod
+    def _is_real_evaluated(ind: WFJSSPIndividual) -> bool:
+        return ind.fitness.get("fitness_source") == "real"
+
+    def _best_real_individuals(self, individuals: List[WFJSSPIndividual]) -> List[WFJSSPIndividual]:
+        real = [ind for ind in individuals if self._is_real_evaluated(ind)]
+        if not real:
+            return []
+        real.sort(key=lambda x: x.fitness["makespan"])
+        best_value = real[0].fitness["makespan"]
+        return [ind for ind in real if ind.fitness["makespan"] == best_value]
+
+    @staticmethod
     def _update_mutation_probability(p: float, generation: int, last_progress: int, max_wait: int, max_p: float) -> float:
         """
         Englisch:
@@ -1008,7 +1178,9 @@ class WFJSSPGA:
         elitism = int(self.config.elitism_rate * population_size)
         max_wait = self.config.restart_generations
 
-        overall_best = self._get_all_equal(self.population[0], self.population)
+        overall_best = self._best_real_individuals(self.population)
+        if not overall_best:
+            overall_best = self._get_all_equal(self.population[0], self.population)
         current_best = self._get_all_equal(self.population[0], self.population)
         last_progress = 0
         generation = 0
@@ -1059,6 +1231,13 @@ class WFJSSPGA:
                     "seq_mutations": int(current_operator_stats.get("sequence", 0)),
                     "machine_mutations": int(current_operator_stats.get("machine", 0)),
                     "worker_mutations": int(current_operator_stats.get("worker", 0)),
+                    "surrogate_enabled": bool(self.surrogate is not None),
+                    "surrogate_ready": bool(self.surrogate is not None and self.surrogate.is_ready()),
+                    "surrogate_samples": 0 if self.surrogate is None else len(self.surrogate.samples),
+                    "surrogate_fit_count": int(self.surrogate_fit_count),
+                    "surrogate_predictions": int(self.surrogate_predictions),
+                    "surrogate_real_candidate_evaluations": int(self.surrogate_real_candidate_evaluations),
+                    "best_fitness_source": self.population[0].fitness.get("fitness_source"),
                 }
             )
 
@@ -1102,6 +1281,9 @@ class WFJSSPGA:
                 self.create_population(population_size, stop_condition=stop_limit_reached)
                 if not self.population:
                     break
+                restart_best_real = self._best_real_individuals(self.population)
+                if restart_best_real and restart_best_real[0].fitness["makespan"] < overall_best[0].fitness["makespan"]:
+                    overall_best = restart_best_real if keep_multiple else [restart_best_real[0]]
                 mutation_probability = float(self.config.mutation_probability)
                 last_progress = generation
                 restarts += 1
@@ -1162,15 +1344,16 @@ class WFJSSPGA:
 
             if not current_best or self.population[0].fitness["makespan"] < current_best[0].fitness["makespan"]:
                 current_best = self._get_all_equal(self.population[0], self.population) if keep_multiple else [self.population[0]]
-                if current_best[0].fitness["makespan"] < overall_best[0].fitness["makespan"]:
-                    overall_best = self._get_all_equal(self.population[0], self.population) if keep_multiple else [current_best[0]]
-                elif keep_multiple and current_best[0].fitness["makespan"] == overall_best[0].fitness["makespan"]:
+                best_real = self._best_real_individuals(self.population)
+                if best_real and best_real[0].fitness["makespan"] < overall_best[0].fitness["makespan"]:
+                    overall_best = best_real if keep_multiple else [best_real[0]]
+                    last_progress = generation
+                elif keep_multiple and best_real and best_real[0].fitness["makespan"] == overall_best[0].fitness["makespan"]:
                     known = set(id(x) for x in overall_best)
-                    for ind in current_best:
+                    for ind in best_real:
                         if id(ind) not in known:
                             overall_best.append(ind)
                             known.add(id(ind))
-                last_progress = generation
             elif keep_multiple and self.population[0].fitness["makespan"] == current_best[0].fitness["makespan"]:
                 equals = self._get_all_equal(self.population[0], self.population)
                 known_current = set(id(x) for x in current_best)
@@ -1178,12 +1361,24 @@ class WFJSSPGA:
                     if id(ind) not in known_current:
                         current_best.append(ind)
                         known_current.add(id(ind))
-                if current_best[0].fitness["makespan"] == overall_best[0].fitness["makespan"]:
+                best_real = self._best_real_individuals(self.population)
+                if best_real and best_real[0].fitness["makespan"] == overall_best[0].fitness["makespan"]:
                     known_best = set(id(x) for x in overall_best)
-                    for ind in current_best:
+                    for ind in best_real:
                         if id(ind) not in known_best:
                             overall_best.append(ind)
                             known_best.add(id(ind))
+
+            best_real = self._best_real_individuals(self.population)
+            if best_real and best_real[0].fitness["makespan"] < overall_best[0].fitness["makespan"]:
+                overall_best = best_real if keep_multiple else [best_real[0]]
+                last_progress = generation
+            elif keep_multiple and best_real and best_real[0].fitness["makespan"] == overall_best[0].fitness["makespan"]:
+                known_best = set(id(x) for x in overall_best)
+                for ind in best_real:
+                    if id(ind) not in known_best:
+                        overall_best.append(ind)
+                        known_best.add(id(ind))
 
             new_stats = self._summarize_population()
             global_best_after = float(overall_best[0].fitness["makespan"])
