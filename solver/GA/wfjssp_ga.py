@@ -950,6 +950,8 @@ class WFJSSPGA:
         Returns:
             float: Updated mutation probability.
         """
+        if max_wait <= 0:
+            return max_p
         return p + ((((generation - last_progress) * (1.0 / max_wait)) ** 4) * max_p)
 
     def run(
@@ -1072,8 +1074,13 @@ class WFJSSPGA:
                 break
 
             if generation > 0 and last_progress < generation - 1:
-                mutation_probability = self._update_mutation_probability(
+                updated_mutation_probability = self._update_mutation_probability(
                     mutation_probability, generation, last_progress, max_wait, max_mutation_probability
+                )
+                mutation_probability = (
+                    updated_mutation_probability
+                    if do_restart
+                    else min(max_mutation_probability, updated_mutation_probability)
                 )
 
             restart_happened = False
