@@ -775,6 +775,14 @@ class WFJSSPGA:
                 self.surrogate_since_last_fit = 0
             return
 
+        if self.surrogate.model is None:
+            if not self.surrogate.fit():
+                for ind in individuals:
+                    self.evaluate_real(ind, candidate_id=self._new_candidate_id())
+                return
+            self.surrogate_fit_count += 1
+            self.surrogate_since_last_fit = 0
+
         candidate_records = []
         for ind in individuals:
             candidate_id = self._new_candidate_id()
@@ -1425,6 +1433,10 @@ class WFJSSPGA:
             "runtime_s": time.time() - start_time,
             "restarts": restarts,
             "history": history,
+            "surrogate_samples": 0 if self.surrogate is None else len(self.surrogate.samples),
+            "surrogate_fit_count": self.surrogate_fit_count,
+            "surrogate_predictions": self.surrogate_predictions,
+            "surrogate_real_candidate_evaluations": self.surrogate_real_candidate_evaluations,
         }
 
 
