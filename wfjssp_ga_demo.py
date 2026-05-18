@@ -66,6 +66,7 @@ GA_CONFIG = {
     "surrogate_n_estimators": 300, 
     "surrogate_min_samples_leaf": 3,
     "surrogate_max_features": "sqrt",
+    "surrogate_n_jobs": -1,
     "elitism_rate": 0.1,
     "restart_generations": 800,
     "enable_rl_mutation_control": ENABLE_RL_MUTATION_CONTROL,

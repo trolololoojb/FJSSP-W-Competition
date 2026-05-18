@@ -137,6 +137,7 @@ class WorkerGAConfig:
     surrogate_n_estimators: int = 300
     surrogate_min_samples_leaf: int = 3
     surrogate_max_features: str = "sqrt"
+    surrogate_n_jobs: Optional[int] = -1
     surrogate_candidate_id_start: int = 0
     seed: Optional[int] = None # random seed for reproducibility
     enable_rl_mutation_control: bool = False
@@ -602,6 +603,7 @@ class WFJSSPGA:
                 n_estimators=self.config.surrogate_n_estimators,
                 min_samples_leaf=self.config.surrogate_min_samples_leaf,
                 max_features=self.config.surrogate_max_features,
+                n_jobs=self.config.surrogate_n_jobs,
                 random_state=self.config.seed,
             )
         self._next_candidate_id = int(self.config.surrogate_candidate_id_start)

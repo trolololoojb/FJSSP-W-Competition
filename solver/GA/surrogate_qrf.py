@@ -47,12 +47,14 @@ class QRFSurrogate:
         n_estimators: int = 300,
         min_samples_leaf: int = 3,
         max_features="sqrt",
+        n_jobs: int | None = -1,
         random_state: int | None = None,
     ):
         self.min_samples_before_fit = int(min_samples_before_fit)
         self.n_estimators = int(n_estimators)
         self.min_samples_leaf = int(min_samples_leaf)
         self.max_features = max_features
+        self.n_jobs = n_jobs
         self.random_state = random_state
 
         self.samples: list[SurrogateSample] = []
@@ -82,6 +84,7 @@ class QRFSurrogate:
             n_estimators=self.n_estimators,
             min_samples_leaf=self.min_samples_leaf,
             max_features=self.max_features,
+            n_jobs=self.n_jobs,
             random_state=self.random_state,
         )
         self.model.fit(X, y)
@@ -129,15 +132,44 @@ class QRFSurrogate:
         )
 
     def predict_many(self, candidate_records: list[dict]) -> list[SurrogatePrediction]:
-        self._require_fitted()
-        return [
-            self.predict_one(
-                candidate_id=record["candidate_id"],
-                features=record["features"],
-                deterministic_makespan=record["deterministic_makespan"],
+        model = self._require_fitted()
+        if not candidate_records:
+            return []
+
+        X, _ = feature_dicts_to_matrix(
+            [record["features"] for record in candidate_records],
+            self.feature_names,
+        )
+        quantiles = self._predict_quantiles(X)
+        quantiles = np.asarray(quantiles, dtype=float)
+        if quantiles.ndim == 1:
+            quantiles = quantiles.reshape(-1, 1)
+        if quantiles.shape[0] != len(candidate_records) and quantiles.shape[-1] == len(candidate_records):
+            quantiles = quantiles.T
+
+        try:
+            means = np.asarray(model.predict(X, quantiles="mean"), dtype=float).reshape(-1)
+        except (TypeError, ValueError):
+            means = np.asarray(model.predict(X), dtype=float).reshape(-1)
+
+        predictions: list[SurrogatePrediction] = []
+        for row_idx, record in enumerate(candidate_records):
+            row_quantiles = np.asarray(quantiles[row_idx], dtype=float).reshape(-1)
+            q10_R, q50_R, q90_R = sorted(float(value) for value in row_quantiles[:3])
+            deterministic_makespan = float(record["deterministic_makespan"])
+            predictions.append(
+                SurrogatePrediction(
+                    candidate_id=int(record["candidate_id"]),
+                    mean_R=float(means[row_idx]),
+                    q10_R=q10_R,
+                    q50_R=q50_R,
+                    q90_R=q90_R,
+                    uncertainty_R=q90_R - q10_R,
+                    predicted_robust_makespan=q50_R * deterministic_makespan,
+                    score=q90_R * deterministic_makespan,
+                )
             )
-            for record in candidate_records
-        ]
+        return predictions
 
     def select_for_real_evaluation(
         self,
