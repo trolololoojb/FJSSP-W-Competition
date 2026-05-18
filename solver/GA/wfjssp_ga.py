@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
 import math
 import random
 import time
@@ -609,11 +609,131 @@ class WFJSSPGA:
         self.surrogate_real_candidate_evaluations = 0
         self.surrogate_since_last_fit = 0
         self.surrogate_fit_count = 0
+        self.surrogate_validation_count = 0
+        self.surrogate_abs_error_R_sum = 0.0
+        self.surrogate_squared_error_R_sum = 0.0
+        self.surrogate_interval_coverage_count = 0
+        self.surrogate_conservative_score_count = 0
+        self.last_surrogate_metrics = self._empty_surrogate_metrics()
 
     def _new_candidate_id(self) -> int:
         candidate_id = self._next_candidate_id
         self._next_candidate_id += 1
         return candidate_id
+
+    @staticmethod
+    def _empty_surrogate_metrics() -> dict:
+        return {
+            "surrogate_batch_predictions": 0,
+            "surrogate_batch_real_evaluations": 0,
+            "surrogate_batch_surrogate_evaluations": 0,
+            "surrogate_batch_real_fraction": 0.0,
+            "surrogate_batch_mean_uncertainty_R": 0.0,
+            "surrogate_batch_mae_R": None,
+            "surrogate_batch_rmse_R": None,
+            "surrogate_batch_mae_robust_makespan": None,
+            "surrogate_batch_score_bias": None,
+            "surrogate_batch_interval_coverage": None,
+            "surrogate_batch_conservative_score_rate": None,
+            "surrogate_batch_spearman_score": None,
+        }
+
+    @staticmethod
+    def _spearman_correlation(xs: Sequence[float], ys: Sequence[float]) -> Optional[float]:
+        if len(xs) < 2 or len(ys) < 2:
+            return None
+        x = np.asarray(xs, dtype=float)
+        y = np.asarray(ys, dtype=float)
+        if not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
+            return None
+        x_ranks = np.argsort(np.argsort(x)).astype(float)
+        y_ranks = np.argsort(np.argsort(y)).astype(float)
+        if float(np.std(x_ranks)) == 0.0 or float(np.std(y_ranks)) == 0.0:
+            return None
+        return float(np.corrcoef(x_ranks, y_ranks)[0, 1])
+
+    def _record_surrogate_batch_metrics(
+        self,
+        predictions: Sequence,
+        selected_ids: Set[int],
+        validation_pairs: Sequence[Tuple],
+    ) -> None:
+        metrics = self._empty_surrogate_metrics()
+        metrics["surrogate_batch_predictions"] = len(predictions)
+        metrics["surrogate_batch_real_evaluations"] = len(selected_ids)
+        metrics["surrogate_batch_surrogate_evaluations"] = max(0, len(predictions) - len(selected_ids))
+        if predictions:
+            metrics["surrogate_batch_real_fraction"] = len(selected_ids) / len(predictions)
+            metrics["surrogate_batch_mean_uncertainty_R"] = float(
+                np.mean([float(prediction.uncertainty_R) for prediction in predictions])
+            )
+
+        if validation_pairs:
+            abs_errors_R = []
+            squared_errors_R = []
+            abs_errors_makespan = []
+            score_biases = []
+            covered = 0
+            conservative = 0
+            predicted_scores = []
+            actual_makespans = []
+
+            for prediction, actual_R, actual_makespan in validation_pairs:
+                abs_error_R = abs(float(prediction.q50_R) - float(actual_R))
+                abs_errors_R.append(abs_error_R)
+                squared_errors_R.append(abs_error_R ** 2)
+                abs_errors_makespan.append(
+                    abs(float(prediction.predicted_robust_makespan) - float(actual_makespan))
+                )
+                score_bias = float(prediction.score) - float(actual_makespan)
+                score_biases.append(score_bias)
+                if float(prediction.q10_R) <= float(actual_R) <= float(prediction.q90_R):
+                    covered += 1
+                if score_bias >= 0.0:
+                    conservative += 1
+                predicted_scores.append(float(prediction.score))
+                actual_makespans.append(float(actual_makespan))
+
+            n_validations = len(validation_pairs)
+            metrics["surrogate_batch_mae_R"] = float(np.mean(abs_errors_R))
+            metrics["surrogate_batch_rmse_R"] = float(math.sqrt(np.mean(squared_errors_R)))
+            metrics["surrogate_batch_mae_robust_makespan"] = float(np.mean(abs_errors_makespan))
+            metrics["surrogate_batch_score_bias"] = float(np.mean(score_biases))
+            metrics["surrogate_batch_interval_coverage"] = covered / n_validations
+            metrics["surrogate_batch_conservative_score_rate"] = conservative / n_validations
+            metrics["surrogate_batch_spearman_score"] = self._spearman_correlation(
+                predicted_scores,
+                actual_makespans,
+            )
+
+            self.surrogate_validation_count += n_validations
+            self.surrogate_abs_error_R_sum += float(np.sum(abs_errors_R))
+            self.surrogate_squared_error_R_sum += float(np.sum(squared_errors_R))
+            self.surrogate_interval_coverage_count += covered
+            self.surrogate_conservative_score_count += conservative
+
+        self.last_surrogate_metrics = metrics
+
+    def _cumulative_surrogate_metrics(self) -> dict:
+        if self.surrogate_validation_count <= 0:
+            return {
+                "surrogate_validation_count": 0,
+                "surrogate_cumulative_mae_R": None,
+                "surrogate_cumulative_rmse_R": None,
+                "surrogate_cumulative_interval_coverage": None,
+                "surrogate_cumulative_conservative_score_rate": None,
+            }
+
+        count = self.surrogate_validation_count
+        return {
+            "surrogate_validation_count": int(count),
+            "surrogate_cumulative_mae_R": float(self.surrogate_abs_error_R_sum / count),
+            "surrogate_cumulative_rmse_R": float(math.sqrt(self.surrogate_squared_error_R_sum / count)),
+            "surrogate_cumulative_interval_coverage": float(self.surrogate_interval_coverage_count / count),
+            "surrogate_cumulative_conservative_score_rate": float(
+                self.surrogate_conservative_score_count / count
+            ),
+        }
 
     def _maybe_print_progress(self) -> None:
         if (
@@ -763,11 +883,13 @@ class WFJSSPGA:
             and self.surrogate is not None
         )
         if not surrogate_active:
+            self.last_surrogate_metrics = self._empty_surrogate_metrics()
             for ind in individuals:
                 self.evaluate_real(ind, candidate_id=self._new_candidate_id())
             return
 
         if not self.surrogate.is_ready():
+            self.last_surrogate_metrics = self._empty_surrogate_metrics()
             for ind in individuals:
                 self.evaluate_real(ind, candidate_id=self._new_candidate_id())
             if self.surrogate.is_ready() and self.surrogate.fit():
@@ -777,6 +899,7 @@ class WFJSSPGA:
 
         if self.surrogate.model is None:
             if not self.surrogate.fit():
+                self.last_surrogate_metrics = self._empty_surrogate_metrics()
                 for ind in individuals:
                     self.evaluate_real(ind, candidate_id=self._new_candidate_id())
                 return
@@ -802,6 +925,7 @@ class WFJSSPGA:
             )
 
         if not candidate_records:
+            self.last_surrogate_metrics = self._empty_surrogate_metrics()
             return
 
         predictions = self.surrogate.predict_many(candidate_records)
@@ -815,12 +939,22 @@ class WFJSSPGA:
             rng=selection_seed,
         )
         records_by_id = {record["candidate_id"]: record for record in candidate_records}
+        validation_pairs = []
 
         for prediction in predictions:
             record = records_by_id[prediction.candidate_id]
             ind = record["individual"]
             if prediction.candidate_id in selected_ids:
                 self.evaluate_real(ind, candidate_id=prediction.candidate_id)
+                actual_R = ind.fitness.get("R")
+                actual_makespan = ind.fitness.get("makespan")
+                if (
+                    actual_R is not None
+                    and actual_makespan is not None
+                    and np.isfinite(float(actual_R))
+                    and np.isfinite(float(actual_makespan))
+                ):
+                    validation_pairs.append((prediction, float(actual_R), float(actual_makespan)))
                 continue
 
             ind.fitness["makespan"] = prediction.score
@@ -833,6 +967,8 @@ class WFJSSPGA:
             ind.fitness["surrogate_uncertainty_R"] = prediction.uncertainty_R
             ind.fitness["surrogate_predicted_robust_makespan"] = prediction.predicted_robust_makespan
             self.surrogate_predictions += 1
+
+        self._record_surrogate_batch_metrics(predictions, selected_ids, validation_pairs)
 
         if self.surrogate_since_last_fit >= self.config.surrogate_retrain_interval_real_candidates:
             if self.surrogate.fit():
@@ -1141,6 +1277,7 @@ class WFJSSPGA:
         progress_interval_evaluations: Optional[int] = DEFAULT_PROGRESS_INTERVAL_EVALUATIONS,
         keep_multiple: bool = True,
         do_restart: bool = True,
+        history_callback: Optional[Callable[[dict], None]] = None,
     ) -> dict:
         """
         Englisch:
@@ -1221,33 +1358,36 @@ class WFJSSPGA:
             rl_agent.reset_episode()
 
         def record_history() -> None:
-            history.append(
-                {
-                    "generation": generation,
-                    "best_makespan": float(self.population[0].fitness["makespan"]),
-                    "overall_best_makespan": float(overall_best[0].fitness["makespan"]),
-                    "function_evaluations": int(self.function_evaluations),
-                    "mutation_probability": float(mutation_probability),
-                    "population_size": int(population_size),
-                    "offspring_amount": int(offspring_amount),
-                    "restarts": int(restarts),
-                    "runtime_s": float(time.time() - start_time),
-                    "rl_enabled": bool(self.config.enable_rl_mutation_control),
-                    "mutation_mix": list(current_mix),
-                    "rl_reward": float(current_reward),
-                    "rl_value_estimate": None if current_value_estimate is None else float(current_value_estimate),
-                    "seq_mutations": int(current_operator_stats.get("sequence", 0)),
-                    "machine_mutations": int(current_operator_stats.get("machine", 0)),
-                    "worker_mutations": int(current_operator_stats.get("worker", 0)),
-                    "surrogate_enabled": bool(self.surrogate is not None),
-                    "surrogate_ready": bool(self.surrogate is not None and self.surrogate.is_ready()),
-                    "surrogate_samples": 0 if self.surrogate is None else len(self.surrogate.samples),
-                    "surrogate_fit_count": int(self.surrogate_fit_count),
-                    "surrogate_predictions": int(self.surrogate_predictions),
-                    "surrogate_real_candidate_evaluations": int(self.surrogate_real_candidate_evaluations),
-                    "best_fitness_source": self.population[0].fitness.get("fitness_source"),
-                }
-            )
+            point = {
+                "generation": generation,
+                "best_makespan": float(self.population[0].fitness["makespan"]),
+                "overall_best_makespan": float(overall_best[0].fitness["makespan"]),
+                "function_evaluations": int(self.function_evaluations),
+                "mutation_probability": float(mutation_probability),
+                "population_size": int(population_size),
+                "offspring_amount": int(offspring_amount),
+                "restarts": int(restarts),
+                "runtime_s": float(time.time() - start_time),
+                "rl_enabled": bool(self.config.enable_rl_mutation_control),
+                "mutation_mix": list(current_mix),
+                "rl_reward": float(current_reward),
+                "rl_value_estimate": None if current_value_estimate is None else float(current_value_estimate),
+                "seq_mutations": int(current_operator_stats.get("sequence", 0)),
+                "machine_mutations": int(current_operator_stats.get("machine", 0)),
+                "worker_mutations": int(current_operator_stats.get("worker", 0)),
+                "surrogate_enabled": bool(self.surrogate is not None),
+                "surrogate_ready": bool(self.surrogate is not None and self.surrogate.is_ready()),
+                "surrogate_samples": 0 if self.surrogate is None else len(self.surrogate.samples),
+                "surrogate_fit_count": int(self.surrogate_fit_count),
+                "surrogate_predictions": int(self.surrogate_predictions),
+                "surrogate_real_candidate_evaluations": int(self.surrogate_real_candidate_evaluations),
+                "best_fitness_source": self.population[0].fitness.get("fitness_source"),
+            }
+            point.update(self.last_surrogate_metrics)
+            point.update(self._cumulative_surrogate_metrics())
+            history.append(point)
+            if history_callback is not None:
+                history_callback(dict(point))
 
         record_history()
 
