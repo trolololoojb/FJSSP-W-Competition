@@ -149,6 +149,8 @@ class WorkerGAConfig:
     local_search_top_k: int = 0
     local_search_uncertain_k: int = 0
     local_search_random_k: int = 0
+    local_search_real_eval_limit_per_origin: int = 0
+    local_search_min_predicted_improvement: float = 0.0
     seed: Optional[int] = None # random seed for reproducibility
     enable_rl_mutation_control: bool = False
     rl_update_interval: int = 16
@@ -662,6 +664,10 @@ class WFJSSPGA:
             "local_search_real_evaluations": 0,
             "local_search_replacements": 0,
             "local_search_best_improvement": 0.0,
+            "local_search_worker_neighbors": 0,
+            "local_search_machine_worker_neighbors": 0,
+            "local_search_sequence_swap_neighbors": 0,
+            "local_search_sequence_shift_neighbors": 0,
         }
 
     @staticmethod
@@ -1030,25 +1036,122 @@ class WFJSSPGA:
             and self.surrogate.model is not None
         )
 
-    def _mutate_local_neighbor(self, neighbor: WFJSSPIndividual) -> bool:
-        if neighbor.config.n_operations <= 0:
-            return False
-
-        operators = (
-            neighbor.mutate_sequence_once,
-            neighbor.mutate_machine_once,
-            neighbor.mutate_worker_once,
+    @staticmethod
+    def individual_key(ind: WFJSSPIndividual) -> Tuple[Tuple[int, ...], Tuple[int, ...], Tuple[int, ...]]:
+        return (
+            tuple(ind.sequence),
+            tuple(ind.assignments),
+            tuple(ind.workers),
         )
-        for _ in range(max(10, neighbor.config.n_operations * 3)):
-            index = self.rng.randrange(neighbor.config.n_operations)
-            valid_indices = neighbor._valid_mutation_operator_indices(index)
-            if not valid_indices:
-                continue
-            operator_idx = self.rng.choice(valid_indices)
-            if operators[operator_idx](index):
-                neighbor.fitness = {"makespan": math.inf}
-                return True
-        return False
+
+    def _local_search_operation_indices(self, decoded: dict, limit: int = 20) -> List[int]:
+        end_times = decoded.get("end_times", [])
+        operation_indices = list(range(min(len(end_times), self.config.n_operations)))
+        operation_indices.sort(key=lambda op_index: (end_times[op_index], op_index), reverse=True)
+        return operation_indices[: max(0, min(limit, len(operation_indices)))]
+
+    def _append_local_neighbor(
+        self,
+        neighbors: List[Tuple[str, WFJSSPIndividual]],
+        seen: Set[Tuple[Tuple[int, ...], Tuple[int, ...], Tuple[int, ...]]],
+        origin: WFJSSPIndividual,
+        neighbor: WFJSSPIndividual,
+        kind: str,
+        limit: int,
+    ) -> bool:
+        if len(neighbors) >= limit:
+            return False
+        key = self.individual_key(neighbor)
+        if key in seen:
+            return True
+        seen.add(key)
+        if key == self.individual_key(origin):
+            return True
+        neighbor.fitness = {"makespan": math.inf}
+        neighbors.append((kind, neighbor))
+        return len(neighbors) < limit
+
+    def _generate_local_neighbors(
+        self,
+        origin: WFJSSPIndividual,
+        decoded: dict,
+        limit: int,
+    ) -> List[Tuple[str, WFJSSPIndividual]]:
+        if limit <= 0:
+            return []
+
+        neighbors: List[Tuple[str, WFJSSPIndividual]] = []
+        seen: Set[Tuple[Tuple[int, ...], Tuple[int, ...], Tuple[int, ...]]] = {self.individual_key(origin)}
+        operation_indices = self._local_search_operation_indices(decoded)
+
+        for op_index in operation_indices:
+            current_machine = origin.assignments[op_index]
+            for worker in self.config.available_workers[op_index][current_machine]:
+                if worker == origin.workers[op_index]:
+                    continue
+                neighbor = origin.copy()
+                neighbor.workers[op_index] = worker
+                if not self._append_local_neighbor(neighbors, seen, origin, neighbor, "worker", limit):
+                    return neighbors
+
+        for op_index in operation_indices:
+            for machine in self.config.available_machines[op_index]:
+                if machine == origin.assignments[op_index]:
+                    continue
+                for worker in self.config.available_workers[op_index][machine]:
+                    neighbor = origin.copy()
+                    neighbor.assignments[op_index] = machine
+                    neighbor.workers[op_index] = worker
+                    if not self._append_local_neighbor(neighbors, seen, origin, neighbor, "machine_worker", limit):
+                        return neighbors
+
+        sequence_positions_by_job: Dict[int, List[int]] = defaultdict(list)
+        for position, job in enumerate(origin.sequence):
+            sequence_positions_by_job[job].append(position)
+
+        important_positions: List[int] = []
+        seen_positions: Set[int] = set()
+        for op_index in operation_indices:
+            job = self.config.job_sequence[op_index]
+            job_start = self.config.job_start_indices[job]
+            occurrence_index = op_index - job_start
+            positions = sequence_positions_by_job.get(job, [])
+            if 0 <= occurrence_index < len(positions):
+                position = positions[occurrence_index]
+                if position not in seen_positions:
+                    important_positions.append(position)
+                    seen_positions.add(position)
+
+        sequence_window = 5
+        for position in important_positions:
+            start = max(0, position - sequence_window)
+            stop = min(self.config.n_operations, position + sequence_window + 1)
+            for swap_position in range(start, stop):
+                if swap_position == position:
+                    continue
+                if origin.sequence[swap_position] == origin.sequence[position]:
+                    continue
+                neighbor = origin.copy()
+                neighbor.sequence[position], neighbor.sequence[swap_position] = (
+                    neighbor.sequence[swap_position],
+                    neighbor.sequence[position],
+                )
+                if not self._append_local_neighbor(neighbors, seen, origin, neighbor, "sequence_swap", limit):
+                    return neighbors
+
+        shift_offsets = (-5, -3, -1, 1, 3, 5)
+        for position in important_positions:
+            for offset in shift_offsets:
+                target = position + offset
+                if target < 0 or target >= self.config.n_operations or target == position:
+                    continue
+                neighbor = origin.copy()
+                value = neighbor.sequence.pop(position)
+                neighbor.sequence.insert(target, value)
+                if not self._append_local_neighbor(neighbors, seen, origin, neighbor, "sequence_shift", limit):
+                    return neighbors
+
+        return neighbors
 
     def _select_local_search_candidate_ids(
         self,
@@ -1056,38 +1159,71 @@ class WFJSSPGA:
         records_by_id: Dict[int, dict],
     ) -> Set[int]:
         selected_ids: Set[int] = set()
+        selected_priority: Dict[int, int] = {}
 
         for prediction in predictions:
             origin = records_by_id[prediction.candidate_id]["origin"]
             origin_makespan = float(origin.fitness.get("makespan", math.inf))
-            if float(prediction.predicted_robust_makespan) < origin_makespan:
+            predicted_improvement = origin_makespan - float(prediction.predicted_robust_makespan)
+            min_improvement = max(0.0, float(self.config.local_search_min_predicted_improvement))
+            if predicted_improvement > 0.0 and predicted_improvement >= min_improvement:
                 selected_ids.add(prediction.candidate_id)
+                selected_priority[prediction.candidate_id] = min(
+                    selected_priority.get(prediction.candidate_id, 99),
+                    0,
+                )
 
         top_k = max(0, int(self.config.local_search_top_k))
         if top_k > 0:
-            selected_ids.update(
-                prediction.candidate_id
-                for prediction in sorted(
-                    predictions,
-                    key=lambda item: item.predicted_robust_makespan,
-                )[:top_k]
-            )
+            for prediction in sorted(
+                predictions,
+                key=lambda item: item.predicted_robust_makespan,
+            )[:top_k]:
+                selected_ids.add(prediction.candidate_id)
+                selected_priority[prediction.candidate_id] = min(
+                    selected_priority.get(prediction.candidate_id, 99),
+                    1,
+                )
 
         uncertain_k = max(0, int(self.config.local_search_uncertain_k))
         if uncertain_k > 0:
-            selected_ids.update(
-                prediction.candidate_id
-                for prediction in sorted(
-                    predictions,
-                    key=lambda item: item.uncertainty_R,
-                    reverse=True,
-                )[:uncertain_k]
-            )
+            for prediction in sorted(
+                predictions,
+                key=lambda item: item.uncertainty_R,
+                reverse=True,
+            )[:uncertain_k]:
+                selected_ids.add(prediction.candidate_id)
+                selected_priority[prediction.candidate_id] = min(
+                    selected_priority.get(prediction.candidate_id, 99),
+                    2,
+                )
 
         random_k = max(0, int(self.config.local_search_random_k))
         remaining = [prediction.candidate_id for prediction in predictions if prediction.candidate_id not in selected_ids]
         if random_k > 0 and remaining:
-            selected_ids.update(self.rng.sample(remaining, k=min(random_k, len(remaining))))
+            for candidate_id in self.rng.sample(remaining, k=min(random_k, len(remaining))):
+                selected_ids.add(candidate_id)
+                selected_priority[candidate_id] = min(selected_priority.get(candidate_id, 99), 3)
+
+        per_origin_limit = max(0, int(self.config.local_search_real_eval_limit_per_origin))
+        if per_origin_limit > 0:
+            predictions_by_id = {prediction.candidate_id: prediction for prediction in predictions}
+            grouped_ids: Dict[int, List[int]] = defaultdict(list)
+            for candidate_id in selected_ids:
+                origin = records_by_id[candidate_id]["origin"]
+                grouped_ids[id(origin)].append(candidate_id)
+
+            capped_ids: Set[int] = set()
+            for candidate_ids in grouped_ids.values():
+                candidate_ids.sort(
+                    key=lambda candidate_id: (
+                        selected_priority.get(candidate_id, 99),
+                        float(predictions_by_id[candidate_id].predicted_robust_makespan),
+                        -float(predictions_by_id[candidate_id].uncertainty_R),
+                    )
+                )
+                capped_ids.update(candidate_ids[:per_origin_limit])
+            selected_ids = capped_ids
 
         return selected_ids
 
@@ -1107,23 +1243,33 @@ class WFJSSPGA:
             return
 
         candidate_records = []
+        neighbor_kind_counts = {
+            "worker": 0,
+            "machine_worker": 0,
+            "sequence_swap": 0,
+            "sequence_shift": 0,
+        }
         neighbors_per_origin = max(0, int(self.config.local_search_neighbors_per_origin))
         for origin in origins:
-            for _ in range(neighbors_per_origin):
+            if stop_condition is not None and stop_condition():
+                break
+            origin_decoded = self._decode_individual(origin)
+            if origin_decoded is None:
+                continue
+            for neighbor_kind, neighbor in self._generate_local_neighbors(origin, origin_decoded, neighbors_per_origin):
                 if stop_condition is not None and stop_condition():
                     break
-                neighbor = origin.copy()
-                if not self._mutate_local_neighbor(neighbor):
-                    continue
                 candidate_id = self._new_candidate_id()
                 decoded = self._decode_individual(neighbor)
                 if decoded is None:
                     continue
+                neighbor_kind_counts[neighbor_kind] = neighbor_kind_counts.get(neighbor_kind, 0) + 1
                 candidate_records.append(
                     {
                         "candidate_id": candidate_id,
                         "individual": neighbor,
                         "origin": origin,
+                        "neighbor_kind": neighbor_kind,
                         "features": decoded["features"],
                         "deterministic_makespan": decoded["deterministic_makespan"],
                     }
@@ -1181,6 +1327,10 @@ class WFJSSPGA:
             "local_search_real_evaluations": real_evaluations,
             "local_search_replacements": replacements,
             "local_search_best_improvement": float(best_improvement),
+            "local_search_worker_neighbors": neighbor_kind_counts.get("worker", 0),
+            "local_search_machine_worker_neighbors": neighbor_kind_counts.get("machine_worker", 0),
+            "local_search_sequence_swap_neighbors": neighbor_kind_counts.get("sequence_swap", 0),
+            "local_search_sequence_shift_neighbors": neighbor_kind_counts.get("sequence_shift", 0),
         }
 
         if self.surrogate_since_last_fit >= self._current_surrogate_retrain_interval():
