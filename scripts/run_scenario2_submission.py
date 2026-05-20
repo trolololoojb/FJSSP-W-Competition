@@ -102,6 +102,11 @@ def parse_args() -> argparse.Namespace:
             "workers and -1 with a single worker."
         ),
     )
+    parser.add_argument(
+        "--disable-local-search",
+        action="store_true",
+        help="Disable GA local search while keeping EA and surrogate evaluation enabled.",
+    )
     return parser.parse_args()
 
 
@@ -198,6 +203,19 @@ def solve_run(
 ) -> dict[str, Any]:
     start_wall = time.time()
     ga_kwargs = dict(GA_CONFIG)
+    if getattr(args, "disable_local_search", False):
+        ga_kwargs.update(
+            {
+                "local_search_interval": 0,
+                "local_search_origin_count": 0,
+                "local_search_neighbors_per_origin": 0,
+                "local_search_top_k": 0,
+                "local_search_uncertain_k": 0,
+                "local_search_random_k": 0,
+                "local_search_real_eval_limit_per_origin": 0,
+                "local_search_min_predicted_improvement": 0.0,
+            }
+        )
     if getattr(args, "surrogate_n_jobs", None) is not None:
         ga_kwargs["surrogate_n_jobs"] = args.surrogate_n_jobs
     ga_kwargs.update(
@@ -305,6 +323,7 @@ def solve_run_task(task: dict[str, Any]) -> dict[str, Any]:
         final_simulations=task["final_simulations"],
         max_function_evaluations=task["max_function_evaluations"],
         surrogate_n_jobs=task["surrogate_n_jobs"],
+        disable_local_search=task["disable_local_search"],
     )
     return solve_run(
         task["instance"],
@@ -475,6 +494,7 @@ def write_csv_outputs(
         "final_simulations": args.final_simulations,
         "workers": args.workers,
         "surrogate_n_jobs": args.surrogate_n_jobs,
+        "local_search_enabled": not bool(args.disable_local_search),
         "uncertainty_json": str(uncertainty_json),
         "official_csv": str(output_dir / "submission_scenario2.csv"),
         "metadata_csv": str(output_dir / "submission_scenario2_with_metadata.csv"),
@@ -528,6 +548,7 @@ def main() -> int:
                         "final_simulations": args.final_simulations,
                         "max_function_evaluations": args.max_function_evaluations,
                         "surrogate_n_jobs": args.surrogate_n_jobs,
+                        "disable_local_search": args.disable_local_search,
                     }
                 )
                 started += 1
