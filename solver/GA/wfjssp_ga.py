@@ -143,6 +143,12 @@ class WorkerGAConfig:
     surrogate_retrain_interval_growth_factor: float = 2.0
     surrogate_max_retrain_interval_real_candidates: int = 1_000
     surrogate_candidate_id_start: int = 0
+    local_search_interval: int = 0
+    local_search_origin_count: int = 0
+    local_search_neighbors_per_origin: int = 0
+    local_search_top_k: int = 0
+    local_search_uncertain_k: int = 0
+    local_search_random_k: int = 0
     seed: Optional[int] = None # random seed for reproducibility
     enable_rl_mutation_control: bool = False
     rl_update_interval: int = 16
@@ -622,6 +628,7 @@ class WFJSSPGA:
         self.surrogate_interval_coverage_count = 0
         self.surrogate_conservative_score_count = 0
         self.last_surrogate_metrics = self._empty_surrogate_metrics()
+        self.last_local_search_metrics = self._empty_local_search_metrics()
 
     def _new_candidate_id(self) -> int:
         candidate_id = self._next_candidate_id
@@ -643,6 +650,18 @@ class WFJSSPGA:
             "surrogate_batch_interval_coverage": None,
             "surrogate_batch_conservative_score_rate": None,
             "surrogate_batch_spearman_score": None,
+        }
+
+    @staticmethod
+    def _empty_local_search_metrics() -> dict:
+        return {
+            "local_search_runs": 0,
+            "local_search_origins": 0,
+            "local_search_neighbors": 0,
+            "local_search_predictions": 0,
+            "local_search_real_evaluations": 0,
+            "local_search_replacements": 0,
+            "local_search_best_improvement": 0.0,
         }
 
     @staticmethod
@@ -993,6 +1012,176 @@ class WFJSSPGA:
             self.surrogate_predictions += 1
 
         self._record_surrogate_batch_metrics(predictions, selected_ids, validation_pairs)
+
+        if self.surrogate_since_last_fit >= self._current_surrogate_retrain_interval():
+            if self.surrogate.fit():
+                self.surrogate_fit_count += 1
+                self.surrogate_since_last_fit = 0
+
+    def _local_search_enabled(self) -> bool:
+        return (
+            int(self.config.local_search_interval) > 0
+            and int(self.config.local_search_origin_count) > 0
+            and int(self.config.local_search_neighbors_per_origin) > 0
+            and self.config.use_surrogate_evaluation
+            and self.config.use_stochastic_evaluation
+            and self.surrogate is not None
+            and self.surrogate.is_ready()
+            and self.surrogate.model is not None
+        )
+
+    def _mutate_local_neighbor(self, neighbor: WFJSSPIndividual) -> bool:
+        if neighbor.config.n_operations <= 0:
+            return False
+
+        operators = (
+            neighbor.mutate_sequence_once,
+            neighbor.mutate_machine_once,
+            neighbor.mutate_worker_once,
+        )
+        for _ in range(max(10, neighbor.config.n_operations * 3)):
+            index = self.rng.randrange(neighbor.config.n_operations)
+            valid_indices = neighbor._valid_mutation_operator_indices(index)
+            if not valid_indices:
+                continue
+            operator_idx = self.rng.choice(valid_indices)
+            if operators[operator_idx](index):
+                neighbor.fitness = {"makespan": math.inf}
+                return True
+        return False
+
+    def _select_local_search_candidate_ids(
+        self,
+        predictions: Sequence,
+        records_by_id: Dict[int, dict],
+    ) -> Set[int]:
+        selected_ids: Set[int] = set()
+
+        for prediction in predictions:
+            origin = records_by_id[prediction.candidate_id]["origin"]
+            origin_makespan = float(origin.fitness.get("makespan", math.inf))
+            if float(prediction.predicted_robust_makespan) < origin_makespan:
+                selected_ids.add(prediction.candidate_id)
+
+        top_k = max(0, int(self.config.local_search_top_k))
+        if top_k > 0:
+            selected_ids.update(
+                prediction.candidate_id
+                for prediction in sorted(
+                    predictions,
+                    key=lambda item: item.predicted_robust_makespan,
+                )[:top_k]
+            )
+
+        uncertain_k = max(0, int(self.config.local_search_uncertain_k))
+        if uncertain_k > 0:
+            selected_ids.update(
+                prediction.candidate_id
+                for prediction in sorted(
+                    predictions,
+                    key=lambda item: item.uncertainty_R,
+                    reverse=True,
+                )[:uncertain_k]
+            )
+
+        random_k = max(0, int(self.config.local_search_random_k))
+        remaining = [prediction.candidate_id for prediction in predictions if prediction.candidate_id not in selected_ids]
+        if random_k > 0 and remaining:
+            selected_ids.update(self.rng.sample(remaining, k=min(random_k, len(remaining))))
+
+        return selected_ids
+
+    def run_local_search(self, stop_condition=None) -> None:
+        self.last_local_search_metrics = self._empty_local_search_metrics()
+        if not self._local_search_enabled():
+            return
+
+        origins = [
+            ind
+            for ind in self.population
+            if self._is_real_evaluated(ind) and np.isfinite(float(ind.fitness.get("makespan", math.inf)))
+        ]
+        origins.sort(key=lambda x: x.fitness["makespan"])
+        origins = origins[: max(0, int(self.config.local_search_origin_count))]
+        if not origins:
+            return
+
+        candidate_records = []
+        neighbors_per_origin = max(0, int(self.config.local_search_neighbors_per_origin))
+        for origin in origins:
+            for _ in range(neighbors_per_origin):
+                if stop_condition is not None and stop_condition():
+                    break
+                neighbor = origin.copy()
+                if not self._mutate_local_neighbor(neighbor):
+                    continue
+                candidate_id = self._new_candidate_id()
+                decoded = self._decode_individual(neighbor)
+                if decoded is None:
+                    continue
+                candidate_records.append(
+                    {
+                        "candidate_id": candidate_id,
+                        "individual": neighbor,
+                        "origin": origin,
+                        "features": decoded["features"],
+                        "deterministic_makespan": decoded["deterministic_makespan"],
+                    }
+                )
+
+        if not candidate_records:
+            return
+
+        predictions = self.surrogate.predict_many(candidate_records)
+        records_by_id = {record["candidate_id"]: record for record in candidate_records}
+        selected_ids = self._select_local_search_candidate_ids(predictions, records_by_id)
+
+        best_by_origin: Dict[int, WFJSSPIndividual] = {}
+        real_evaluations = 0
+        for prediction in predictions:
+            if prediction.candidate_id not in selected_ids:
+                continue
+            if stop_condition is not None and stop_condition():
+                break
+            record = records_by_id[prediction.candidate_id]
+            neighbor = record["individual"]
+            origin = record["origin"]
+            self.evaluate_real(neighbor, candidate_id=prediction.candidate_id)
+            real_evaluations += 1
+            if not np.isfinite(float(neighbor.fitness.get("makespan", math.inf))):
+                continue
+            origin_key = id(origin)
+            current_best = best_by_origin.get(origin_key)
+            if current_best is None or neighbor.fitness["makespan"] < current_best.fitness["makespan"]:
+                best_by_origin[origin_key] = neighbor
+
+        replacements = 0
+        best_improvement = 0.0
+        for origin in origins:
+            best_neighbor = best_by_origin.get(id(origin))
+            if best_neighbor is None:
+                continue
+            origin_makespan = float(origin.fitness.get("makespan", math.inf))
+            neighbor_makespan = float(best_neighbor.fitness.get("makespan", math.inf))
+            if neighbor_makespan < origin_makespan:
+                origin.sequence = best_neighbor.sequence[:]
+                origin.assignments = best_neighbor.assignments[:]
+                origin.workers = best_neighbor.workers[:]
+                origin.fitness = dict(best_neighbor.fitness)
+                origin.feasible = best_neighbor.feasible
+                replacements += 1
+                best_improvement = max(best_improvement, origin_makespan - neighbor_makespan)
+
+        self.population.sort(key=lambda x: x.fitness["makespan"])
+        self.last_local_search_metrics = {
+            "local_search_runs": 1,
+            "local_search_origins": len(origins),
+            "local_search_neighbors": len(candidate_records),
+            "local_search_predictions": len(predictions),
+            "local_search_real_evaluations": real_evaluations,
+            "local_search_replacements": replacements,
+            "local_search_best_improvement": float(best_improvement),
+        }
 
         if self.surrogate_since_last_fit >= self._current_surrogate_retrain_interval():
             if self.surrogate.fit():
@@ -1408,6 +1597,7 @@ class WFJSSPGA:
                 "best_fitness_source": self.population[0].fitness.get("fitness_source"),
             }
             point.update(self.last_surrogate_metrics)
+            point.update(self.last_local_search_metrics)
             point.update(self._cumulative_surrogate_metrics())
             history.append(point)
             if history_callback is not None:
@@ -1513,6 +1703,14 @@ class WFJSSPGA:
             pool.sort(key=lambda x: x.fitness["makespan"])
             self.population = pool[:population_size]
             current_operator_stats = dict(self.last_mutation_operator_counts)
+            self.last_local_search_metrics = self._empty_local_search_metrics()
+            local_search_interval = max(0, int(self.config.local_search_interval))
+            if (
+                local_search_interval > 0
+                and (generation + 1) % local_search_interval == 0
+                and not stop_limit_reached()
+            ):
+                self.run_local_search(stop_condition=stop_limit_reached)
 
             if not current_best or self.population[0].fitness["makespan"] < current_best[0].fitness["makespan"]:
                 current_best = self._get_all_equal(self.population[0], self.population) if keep_multiple else [self.population[0]]

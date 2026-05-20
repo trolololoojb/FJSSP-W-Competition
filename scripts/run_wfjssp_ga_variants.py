@@ -24,16 +24,17 @@ if str(REPO_ROOT) not in sys.path:
 
 
 VARIANTS = [
-    {
-        "name": "no_rl_no_surrogate",
-        "enable_rl_mutation_control": False,
-        "use_surrogate_evaluation": False,
-    },
-    {
-        "name": "no_rl_with_surrogate",
-        "enable_rl_mutation_control": False,
-        "use_surrogate_evaluation": True,
-    },
+    # {
+    #     "name": "no_rl_no_surrogate",
+    #     "enable_rl_mutation_control": False,
+    #     "use_surrogate_evaluation": False,
+    #     # "do_restart": True,
+    # },
+    # {
+    #     "name": "no_rl_with_surrogate",
+    #     "enable_rl_mutation_control": False,
+    #     "use_surrogate_evaluation": True,
+    # },
     {
         "name": "with_rl_with_surrogate",
         "enable_rl_mutation_control": True,
