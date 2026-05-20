@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import csv
 import json
 import math
+import os
 import statistics
 import sys
 import time
@@ -85,6 +87,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-failed-runs", action="store_true")
     parser.add_argument("--instances", nargs="+", help="Optional instance filenames to run.")
     parser.add_argument("--limit-runs", type=int, help="Stop after this many unfinished runs.")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="Parallel GA worker processes. Use 0 to use all available CPU cores.",
+    )
+    parser.add_argument(
+        "--surrogate-n-jobs",
+        type=int,
+        default=None,
+        help=(
+            "Threads used by each run's surrogate model. Defaults to 1 with parallel "
+            "workers and -1 with a single worker."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -155,6 +172,22 @@ def uncertainty_for(payload: dict[str, Any], instance_name: str, run: int) -> tu
     return int(run_data["seed"]), params
 
 
+def resolve_worker_count(requested_workers: int) -> int:
+    if requested_workers < 0:
+        raise ValueError("--workers must be >= 0.")
+    if requested_workers == 0:
+        return max(1, os.process_cpu_count() or 1)
+    return requested_workers
+
+
+def resolve_surrogate_n_jobs(workers: int, requested_n_jobs: int | None) -> int:
+    if requested_n_jobs is not None:
+        if requested_n_jobs == 0:
+            raise ValueError("--surrogate-n-jobs must not be 0.")
+        return requested_n_jobs
+    return 1 if workers > 1 else -1
+
+
 def solve_run(
     instance_name: str,
     run: int,
@@ -165,6 +198,8 @@ def solve_run(
 ) -> dict[str, Any]:
     start_wall = time.time()
     ga_kwargs = dict(GA_CONFIG)
+    if getattr(args, "surrogate_n_jobs", None) is not None:
+        ga_kwargs["surrogate_n_jobs"] = args.surrogate_n_jobs
     ga_kwargs.update(
         {
             "seed": seed,
@@ -260,6 +295,25 @@ def solve_run(
         "uncertainty_parameters": uncertainty_parameters,
         "final_simulation_results": [float(x) for x in final_results],
     }
+
+
+def solve_run_task(task: dict[str, Any]) -> dict[str, Any]:
+    parser = WorkerBenchmarkParser()
+    encoding = parser.parse_benchmark(str(task["instance_path"]))
+    args = argparse.Namespace(
+        internal_simulations=task["internal_simulations"],
+        final_simulations=task["final_simulations"],
+        max_function_evaluations=task["max_function_evaluations"],
+        surrogate_n_jobs=task["surrogate_n_jobs"],
+    )
+    return solve_run(
+        task["instance"],
+        int(task["run"]),
+        int(task["seed"]),
+        encoding,
+        task["uncertainty_parameters"],
+        args,
+    )
 
 
 def append_jsonl(path: Path, row: dict[str, Any]) -> None:
@@ -419,6 +473,8 @@ def write_csv_outputs(
         "max_function_evaluations": args.max_function_evaluations,
         "internal_simulations": args.internal_simulations,
         "final_simulations": args.final_simulations,
+        "workers": args.workers,
+        "surrogate_n_jobs": args.surrogate_n_jobs,
         "uncertainty_json": str(uncertainty_json),
         "official_csv": str(output_dir / "submission_scenario2.csv"),
         "metadata_csv": str(output_dir / "submission_scenario2_with_metadata.csv"),
@@ -435,6 +491,8 @@ def write_csv_outputs(
 def main() -> int:
     args = parse_args()
     try:
+        args.workers = resolve_worker_count(args.workers)
+        args.surrogate_n_jobs = resolve_surrogate_n_jobs(args.workers, args.surrogate_n_jobs)
         uncertainty_payload = load_uncertainty(args.uncertainty_json)
         instance_files = selected_instance_files(args.instances_dir, args.instances)
         if not instance_files:
@@ -442,13 +500,12 @@ def main() -> int:
 
         raw_path = args.output_dir / "raw_results.jsonl"
         completed = load_completed_ok(raw_path) if args.resume else {}
-        parser = WorkerBenchmarkParser()
         failures = []
         total_expected = len(instance_files) * args.n_runs
         started = 0
+        tasks = []
 
         for instance_position, instance_path in enumerate(instance_files, start=1):
-            encoding = parser.parse_benchmark(str(instance_path))
             for run in range(1, args.n_runs + 1):
                 key = (instance_path.name, run)
                 progress_index = (instance_position - 1) * args.n_runs + run
@@ -458,25 +515,85 @@ def main() -> int:
                 if args.limit_runs is not None and started >= args.limit_runs:
                     break
                 seed, uncertainty_parameters = uncertainty_for(uncertainty_payload, instance_path.name, run)
-                print(f"[{progress_index}/{total_expected}] instance={instance_path.name} run={run} seed={seed}", flush=True)
-                try:
-                    row = solve_run(instance_path.name, run, seed, encoding, uncertainty_parameters, args)
-                    append_jsonl(raw_path, row)
-                    completed[key] = row
-                except Exception as exc:
-                    error_row = {
+                tasks.append(
+                    {
+                        "progress_index": progress_index,
+                        "total_expected": total_expected,
+                        "instance_path": str(instance_path),
                         "instance": instance_path.name,
                         "run": run,
                         "seed": seed,
-                        "status": "error",
-                        "error": str(exc),
+                        "uncertainty_parameters": uncertainty_parameters,
+                        "internal_simulations": args.internal_simulations,
+                        "final_simulations": args.final_simulations,
+                        "max_function_evaluations": args.max_function_evaluations,
+                        "surrogate_n_jobs": args.surrogate_n_jobs,
                     }
-                    append_jsonl(raw_path, error_row)
-                    failures.append(error_row)
-                    print(f"Error in {instance_path.name} run {run}: {exc}", file=sys.stderr, flush=True)
+                )
                 started += 1
             if args.limit_runs is not None and started >= args.limit_runs:
                 break
+
+        if tasks:
+            active_workers = min(args.workers, len(tasks))
+            print(
+                f"Running {len(tasks)} unfinished run(s) with {active_workers} worker(s) "
+                f"and surrogate_n_jobs={args.surrogate_n_jobs}.",
+                flush=True,
+            )
+
+        def record_failure(task: dict[str, Any], exc: BaseException) -> None:
+            error_row = {
+                "instance": task["instance"],
+                "run": task["run"],
+                "seed": task["seed"],
+                "status": "error",
+                "error": str(exc),
+            }
+            append_jsonl(raw_path, error_row)
+            failures.append(error_row)
+            print(
+                f"Error in {task['instance']} run {task['run']}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        if tasks and min(args.workers, len(tasks)) == 1:
+            for task in tasks:
+                print(
+                    f"[{task['progress_index']}/{task['total_expected']}] "
+                    f"instance={task['instance']} run={task['run']} seed={task['seed']}",
+                    flush=True,
+                )
+                try:
+                    row = solve_run_task(task)
+                    append_jsonl(raw_path, row)
+                    completed[(task["instance"], int(task["run"]))] = row
+                    print(
+                        f"[{task['progress_index']}/{task['total_expected']}] "
+                        f"done instance={task['instance']} run={task['run']} "
+                        f"fitness={row['fitness']}",
+                        flush=True,
+                    )
+                except Exception as exc:
+                    record_failure(task, exc)
+        elif tasks:
+            with ProcessPoolExecutor(max_workers=min(args.workers, len(tasks))) as executor:
+                future_to_task = {executor.submit(solve_run_task, task): task for task in tasks}
+                for future in as_completed(future_to_task):
+                    task = future_to_task[future]
+                    try:
+                        row = future.result()
+                        append_jsonl(raw_path, row)
+                        completed[(task["instance"], int(task["run"]))] = row
+                        print(
+                            f"[{task['progress_index']}/{task['total_expected']}] "
+                            f"done instance={task['instance']} run={task['run']} "
+                            f"fitness={row['fitness']}",
+                            flush=True,
+                        )
+                    except Exception as exc:
+                        record_failure(task, exc)
 
         ok_rows = list(completed.values())
         write_csv_outputs(
