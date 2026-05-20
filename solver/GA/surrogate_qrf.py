@@ -48,6 +48,7 @@ class QRFSurrogate:
         min_samples_leaf: int = 3,
         max_features="sqrt",
         n_jobs: int | None = -1,
+        max_training_samples: int | None = None,
         random_state: int | None = None,
     ):
         self.min_samples_before_fit = int(min_samples_before_fit)
@@ -55,11 +56,15 @@ class QRFSurrogate:
         self.min_samples_leaf = int(min_samples_leaf)
         self.max_features = max_features
         self.n_jobs = n_jobs
+        self.max_training_samples = (
+            None if max_training_samples is None else max(1, int(max_training_samples))
+        )
         self.random_state = random_state
 
         self.samples: list[SurrogateSample] = []
         self.feature_names: list[str] | None = None
         self.model: RandomForestQuantileRegressor | None = None
+        self.last_fit_sample_count = 0
 
     def add_sample(self, sample: SurrogateSample) -> None:
         self.samples.append(sample)
@@ -70,15 +75,21 @@ class QRFSurrogate:
     def is_ready(self) -> bool:
         return len(self.samples) >= self.min_samples_before_fit
 
+    def _training_samples(self) -> list[SurrogateSample]:
+        if self.max_training_samples is None or len(self.samples) <= self.max_training_samples:
+            return self.samples
+        return self.samples[-self.max_training_samples :]
+
     def fit(self) -> bool:
         if not self.is_ready():
             return False
 
+        training_samples = self._training_samples()
         X, self.feature_names = feature_dicts_to_matrix(
-            [sample.features for sample in self.samples],
+            [sample.features for sample in training_samples],
             self.feature_names,
         )
-        y = np.asarray([float(sample.R) for sample in self.samples], dtype=float)
+        y = np.asarray([float(sample.R) for sample in training_samples], dtype=float)
 
         self.model = RandomForestQuantileRegressor(
             n_estimators=self.n_estimators,
@@ -88,6 +99,7 @@ class QRFSurrogate:
             random_state=self.random_state,
         )
         self.model.fit(X, y)
+        self.last_fit_sample_count = len(training_samples)
         return True
 
     def _require_fitted(self) -> RandomForestQuantileRegressor:

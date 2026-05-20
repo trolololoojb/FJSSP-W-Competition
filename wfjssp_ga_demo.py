@@ -62,11 +62,15 @@ GA_CONFIG = {
     "surrogate_uncertain_fraction": 0.005,
     "surrogate_random_fraction": 0.005,
     "surrogate_min_real_per_generation": 5,
-    "surrogate_retrain_interval_real_candidates": 100,
+    "surrogate_retrain_interval_real_candidates": 100, # bestimmt die Anzahl echter Kandidaten zwischen zwei Retrainings, wenn kein Wachstum (surrogate_retrain_interval_growth_samples) vorliegt
     "surrogate_n_estimators": 300, 
     "surrogate_min_samples_leaf": 3,
     "surrogate_max_features": "sqrt",
     "surrogate_n_jobs": -1,
+    "surrogate_max_training_samples": 5_000,
+    "surrogate_retrain_interval_growth_samples": 5_000,
+    "surrogate_retrain_interval_growth_factor": 2.0,
+    "surrogate_max_retrain_interval_real_candidates": 1_000,  # bestimmt die maximale Anzahl echter Kandidaten zwischen zwei Retrainings, unabhängig von Wachstum
     "elitism_rate": 0.1,
     "restart_generations": 800,
     "enable_rl_mutation_control": ENABLE_RL_MUTATION_CONTROL,
@@ -84,8 +88,8 @@ GA_CONFIG = {
 
 RUN_CONFIG = {
     "max_generations": None,
-    "time_limit_s": None,
-    "max_function_evaluations": 5_000_000,
+    "time_limit_s": 22000, 
+    "max_function_evaluations": None,
     "progress_interval_evaluations": 50_000,
     "keep_multiple": False,
     "do_restart": False,

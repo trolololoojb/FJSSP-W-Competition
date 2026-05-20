@@ -38,6 +38,29 @@ def test_wfjssp_ga_initializes_surrogate_when_enabled_for_stochastic_eval():
 
     assert ga.surrogate is not None
     assert ga.surrogate.min_samples_before_fit == 300
+    assert ga.surrogate.max_training_samples == 5000
+
+
+def test_surrogate_retrain_interval_grows_with_sample_count():
+    ga = WFJSSPGA(
+        _config(
+            use_surrogate_evaluation=True,
+            surrogate_warmup_real_candidates=10,
+            surrogate_retrain_interval_real_candidates=100,
+            surrogate_retrain_interval_growth_samples=50,
+            surrogate_retrain_interval_growth_factor=2.0,
+            surrogate_max_retrain_interval_real_candidates=500,
+        )
+    )
+
+    assert ga.surrogate is not None
+    assert ga._current_surrogate_retrain_interval() == 100
+
+    ga.surrogate.add_samples([object()] * 60)
+    assert ga._current_surrogate_retrain_interval() == 200
+
+    ga.surrogate.add_samples([object()] * 200)
+    assert ga._current_surrogate_retrain_interval() == 500
 
 
 def test_evaluate_batch_empty_does_not_fail_with_surrogate_enabled():

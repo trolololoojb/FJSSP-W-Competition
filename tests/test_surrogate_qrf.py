@@ -117,11 +117,26 @@ def test_fit_trains_after_enough_synthetic_samples():
     surrogate = _fitted_surrogate()
 
     assert surrogate.model is not None
+    assert surrogate.last_fit_sample_count == 40
     assert surrogate.feature_names == [
         "deterministic_makespan",
         "max_worker_load",
         "mean_worker_load",
     ]
+
+
+def test_fit_uses_latest_samples_when_training_window_is_limited():
+    surrogate = QRFSurrogate(
+        min_samples_before_fit=3,
+        n_estimators=5,
+        max_training_samples=3,
+        random_state=123,
+    )
+    surrogate.add_samples([_sample(i) for i in range(10)])
+
+    assert surrogate.fit()
+    assert surrogate.last_fit_sample_count == 3
+    assert [sample.candidate_id for sample in surrogate._training_samples()] == [7, 8, 9]
 
 
 def test_predict_one_returns_ordered_quantiles():

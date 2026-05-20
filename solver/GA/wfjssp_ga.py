@@ -138,6 +138,10 @@ class WorkerGAConfig:
     surrogate_min_samples_leaf: int = 3
     surrogate_max_features: str = "sqrt"
     surrogate_n_jobs: Optional[int] = -1
+    surrogate_max_training_samples: Optional[int] = 5_000
+    surrogate_retrain_interval_growth_samples: int = 5_000
+    surrogate_retrain_interval_growth_factor: float = 2.0
+    surrogate_max_retrain_interval_real_candidates: int = 1_000
     surrogate_candidate_id_start: int = 0
     seed: Optional[int] = None # random seed for reproducibility
     enable_rl_mutation_control: bool = False
@@ -604,6 +608,7 @@ class WFJSSPGA:
                 min_samples_leaf=self.config.surrogate_min_samples_leaf,
                 max_features=self.config.surrogate_max_features,
                 n_jobs=self.config.surrogate_n_jobs,
+                max_training_samples=self.config.surrogate_max_training_samples,
                 random_state=self.config.seed,
             )
         self._next_candidate_id = int(self.config.surrogate_candidate_id_start)
@@ -875,6 +880,23 @@ class WFJSSPGA:
     def evaluate(self, ind: WFJSSPIndividual) -> float:
         return self.evaluate_real(ind, candidate_id=self._new_candidate_id())
 
+    def _current_surrogate_retrain_interval(self) -> int:
+        base_interval = max(1, int(self.config.surrogate_retrain_interval_real_candidates))
+        max_interval = max(
+            base_interval,
+            int(self.config.surrogate_max_retrain_interval_real_candidates),
+        )
+        growth_samples = int(self.config.surrogate_retrain_interval_growth_samples)
+        growth_factor = float(self.config.surrogate_retrain_interval_growth_factor)
+        if self.surrogate is None or growth_samples <= 0 or growth_factor <= 1.0:
+            return base_interval
+
+        sample_count = len(self.surrogate.samples)
+        mature_samples = max(0, sample_count - int(self.config.surrogate_warmup_real_candidates))
+        growth_steps = mature_samples // growth_samples
+        interval = int(round(base_interval * (growth_factor ** growth_steps)))
+        return max(base_interval, min(max_interval, interval))
+
     def evaluate_batch(self, individuals: List[WFJSSPIndividual]) -> None:
         if not individuals:
             return
@@ -972,7 +994,7 @@ class WFJSSPGA:
 
         self._record_surrogate_batch_metrics(predictions, selected_ids, validation_pairs)
 
-        if self.surrogate_since_last_fit >= self.config.surrogate_retrain_interval_real_candidates:
+        if self.surrogate_since_last_fit >= self._current_surrogate_retrain_interval():
             if self.surrogate.fit():
                 self.surrogate_fit_count += 1
                 self.surrogate_since_last_fit = 0
