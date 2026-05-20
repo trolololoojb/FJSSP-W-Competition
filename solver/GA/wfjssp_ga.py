@@ -598,6 +598,8 @@ class WFJSSPGA:
         self.rng = random.Random(config.seed)
         self.population: List[WFJSSPIndividual] = []
         self.function_evaluations = 0
+        self.best_found_function_evaluations: Optional[int] = None
+        self._max_function_evaluations: Optional[int] = None
         self.last_mutation_operator_counts = {
             "sequence": 0,
             "machine": 0,
@@ -788,6 +790,11 @@ class WFJSSPGA:
         self.function_evaluations += amount
         self._maybe_print_progress()
 
+    def _has_function_evaluation_budget(self, amount: int = 1) -> bool:
+        if self._max_function_evaluations is None:
+            return True
+        return self.function_evaluations + amount <= self._max_function_evaluations
+
     def _decode_individual(self, ind: WFJSSPIndividual):
         if not ind.feasible:
             return None
@@ -855,6 +862,12 @@ class WFJSSPGA:
             return math.inf
 
         if self.config.use_stochastic_evaluation:
+            expected_evaluations = max(1, int(self.config.n_simulations))
+            if not self._has_function_evaluation_budget(expected_evaluations):
+                ind.fitness["makespan"] = math.inf
+                ind.fitness["fitness_source"] = "budget_exhausted"
+                ind.fitness["candidate_id"] = candidate_id
+                return math.inf
             try:
                 results, robust_makespan, robust_makespan_stdev, R = run_n_simulations(
                     decoded["start_times"],
@@ -878,6 +891,7 @@ class WFJSSPGA:
             ind.fitness["fitness_source"] = "real"
             ind.fitness["candidate_id"] = candidate_id
             self._count_function_evaluation(len(results))
+            ind.fitness["evaluated_at_function_evaluations"] = int(self.function_evaluations)
             if self.surrogate is not None:
                 self.surrogate.add_sample(
                     SurrogateSample(
@@ -895,11 +909,17 @@ class WFJSSPGA:
                 self.surrogate_since_last_fit += 1
             return robust_makespan
         else:
+            if not self._has_function_evaluation_budget(1):
+                ind.fitness["makespan"] = math.inf
+                ind.fitness["fitness_source"] = "budget_exhausted"
+                ind.fitness["candidate_id"] = candidate_id
+                return math.inf
             makespan_val = decoded["deterministic_makespan"]
             ind.fitness["makespan"] = makespan_val
             ind.fitness["fitness_source"] = "real"
             ind.fitness["candidate_id"] = candidate_id
             self._count_function_evaluation()
+            ind.fitness["evaluated_at_function_evaluations"] = int(self.function_evaluations)
             return makespan_val
 
     def evaluate(self, ind: WFJSSPIndividual) -> float:
@@ -1611,6 +1631,16 @@ class WFJSSPGA:
         best_value = real[0].fitness["makespan"]
         return [ind for ind in real if ind.fitness["makespan"] == best_value]
 
+    def _evaluation_at_best_found(self, individuals: Sequence[WFJSSPIndividual]) -> int:
+        values = [
+            int(ind.fitness["evaluated_at_function_evaluations"])
+            for ind in individuals
+            if "evaluated_at_function_evaluations" in ind.fitness
+        ]
+        if values:
+            return min(values)
+        return int(self.function_evaluations)
+
     @staticmethod
     def _update_mutation_probability(p: float, generation: int, last_progress: int, max_wait: int, max_p: float) -> float:
         """
@@ -1659,6 +1689,8 @@ class WFJSSPGA:
             dict: Results including best individual, population, etc.
         """
         self.function_evaluations = 0
+        self.best_found_function_evaluations = None
+        self._max_function_evaluations = max_function_evaluations
         start_time = time.time()
         self._run_start_time = start_time
         self._progress_interval_evaluations = progress_interval_evaluations
@@ -1689,6 +1721,7 @@ class WFJSSPGA:
         overall_best = self._best_real_individuals(self.population)
         if not overall_best:
             overall_best = self._get_all_equal(self.population[0], self.population)
+        self.best_found_function_evaluations = self._evaluation_at_best_found(overall_best)
         current_best = self._get_all_equal(self.population[0], self.population)
         last_progress = 0
         generation = 0
@@ -1796,6 +1829,7 @@ class WFJSSPGA:
                 restart_best_real = self._best_real_individuals(self.population)
                 if restart_best_real and restart_best_real[0].fitness["makespan"] < overall_best[0].fitness["makespan"]:
                     overall_best = restart_best_real if keep_multiple else [restart_best_real[0]]
+                    self.best_found_function_evaluations = self._evaluation_at_best_found(overall_best)
                 mutation_probability = float(self.config.mutation_probability)
                 last_progress = generation
                 restarts += 1
@@ -1867,6 +1901,7 @@ class WFJSSPGA:
                 best_real = self._best_real_individuals(self.population)
                 if best_real and best_real[0].fitness["makespan"] < overall_best[0].fitness["makespan"]:
                     overall_best = best_real if keep_multiple else [best_real[0]]
+                    self.best_found_function_evaluations = self._evaluation_at_best_found(overall_best)
                     last_progress = generation
                 elif keep_multiple and best_real and best_real[0].fitness["makespan"] == overall_best[0].fitness["makespan"]:
                     known = set(id(x) for x in overall_best)
@@ -1892,6 +1927,7 @@ class WFJSSPGA:
             best_real = self._best_real_individuals(self.population)
             if best_real and best_real[0].fitness["makespan"] < overall_best[0].fitness["makespan"]:
                 overall_best = best_real if keep_multiple else [best_real[0]]
+                self.best_found_function_evaluations = self._evaluation_at_best_found(overall_best)
                 last_progress = generation
             elif keep_multiple and best_real and best_real[0].fitness["makespan"] == overall_best[0].fitness["makespan"]:
                 known_best = set(id(x) for x in overall_best)
@@ -1942,6 +1978,11 @@ class WFJSSPGA:
             "population": self.population,
             "generations": generation,
             "function_evaluations": self.function_evaluations,
+            "best_found_function_evaluations": (
+                int(self.best_found_function_evaluations)
+                if self.best_found_function_evaluations is not None
+                else int(self.function_evaluations)
+            ),
             "runtime_s": time.time() - start_time,
             "restarts": restarts,
             "history": history,

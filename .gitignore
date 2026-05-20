@@ -2,6 +2,7 @@
 *.pyc
 util/__pycache__
 results/wfjssp_ga_competition
+results/scenario2_submission/
 wandb
 .codex
 results/wfjssp_ga_variant_comparison
