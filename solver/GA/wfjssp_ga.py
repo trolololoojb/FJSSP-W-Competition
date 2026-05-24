@@ -1483,10 +1483,13 @@ class WFJSSPGA:
         feasible_ratio = float(np.mean(finite_mask)) if makespans.size else 0.0
         finite_values = makespans[finite_mask]
         if finite_values.size == 0:
-            finite_values = np.array([math.inf], dtype=float)
-        best = float(np.min(finite_values))
-        mean = float(np.mean(finite_values))
-        std = float(np.std(finite_values))
+            best = math.inf
+            mean = math.inf
+            std = 0.0
+        else:
+            best = float(np.min(finite_values))
+            mean = float(np.mean(finite_values))
+            std = float(np.std(finite_values))
         return {
             "best_makespan": best,
             "mean_makespan": mean,

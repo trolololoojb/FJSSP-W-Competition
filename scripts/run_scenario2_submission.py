@@ -352,6 +352,11 @@ def write_csv_outputs(
     output_dir.mkdir(parents=True, exist_ok=True)
     rows = sorted(rows, key=lambda row: (row["instance"], int(row["run"])))
 
+    def replace_atomically(path: Path, write_fn: Any) -> None:
+        tmp_path = path.with_name(f"{path.name}.tmp")
+        write_fn(tmp_path)
+        tmp_path.replace(path)
+
     official_fields = [
         "Instance",
         "Fitness",
@@ -361,21 +366,24 @@ def write_csv_outputs(
         "WorkerAssignments",
         "UncertaintyParameters",
     ]
-    with (output_dir / "submission_scenario2.csv").open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=official_fields, delimiter=";")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(
-                {
-                    "Instance": row["instance"],
-                    "Fitness": row["fitness"],
-                    "FunctionEvaluations": row["function_evaluations"],
-                    "StartTimes": compact_json(row["start_times"]),
-                    "MachineAssignments": compact_json(row["machine_assignments"]),
-                    "WorkerAssignments": compact_json(row["worker_assignments"]),
-                    "UncertaintyParameters": compact_json(row["uncertainty_parameters"]),
-                }
-            )
+    def write_official(path: Path) -> None:
+        with path.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=official_fields, delimiter=";")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(
+                    {
+                        "Instance": row["instance"],
+                        "Fitness": row["fitness"],
+                        "FunctionEvaluations": row["function_evaluations"],
+                        "StartTimes": compact_json(row["start_times"]),
+                        "MachineAssignments": compact_json(row["machine_assignments"]),
+                        "WorkerAssignments": compact_json(row["worker_assignments"]),
+                        "UncertaintyParameters": compact_json(row["uncertainty_parameters"]),
+                    }
+                )
+
+    replace_atomically(output_dir / "submission_scenario2.csv", write_official)
 
     metadata_fields = [
         "Instance",
@@ -393,28 +401,31 @@ def write_csv_outputs(
         "RuntimeSeconds",
         "Generations",
     ]
-    with (output_dir / "submission_scenario2_with_metadata.csv").open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=metadata_fields, delimiter=";")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(
-                {
-                    "Instance": row["instance"],
-                    "Run": row["run"],
-                    "Seed": row["seed"],
-                    "Fitness": row["fitness"],
-                    "FunctionEvaluations": row["function_evaluations"],
-                    "StartTimes": compact_json(row["start_times"]),
-                    "MachineAssignments": compact_json(row["machine_assignments"]),
-                    "WorkerAssignments": compact_json(row["worker_assignments"]),
-                    "UncertaintyParameters": compact_json(row["uncertainty_parameters"]),
-                    "DeterministicMakespan": row["deterministic_makespan"],
-                    "FinalRobustStdev": row["final_robust_stdev"],
-                    "FinalR": row["final_R"],
-                    "RuntimeSeconds": row["runtime_s"],
-                    "Generations": row["generations"],
-                }
-            )
+    def write_metadata(path: Path) -> None:
+        with path.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=metadata_fields, delimiter=";")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(
+                    {
+                        "Instance": row["instance"],
+                        "Run": row["run"],
+                        "Seed": row["seed"],
+                        "Fitness": row["fitness"],
+                        "FunctionEvaluations": row["function_evaluations"],
+                        "StartTimes": compact_json(row["start_times"]),
+                        "MachineAssignments": compact_json(row["machine_assignments"]),
+                        "WorkerAssignments": compact_json(row["worker_assignments"]),
+                        "UncertaintyParameters": compact_json(row["uncertainty_parameters"]),
+                        "DeterministicMakespan": row["deterministic_makespan"],
+                        "FinalRobustStdev": row["final_robust_stdev"],
+                        "FinalR": row["final_R"],
+                        "RuntimeSeconds": row["runtime_s"],
+                        "Generations": row["generations"],
+                    }
+                )
+
+    replace_atomically(output_dir / "submission_scenario2_with_metadata.csv", write_metadata)
 
     run_fields = [
         "Instance",
@@ -429,25 +440,28 @@ def write_csv_outputs(
         "RuntimeSeconds",
         "Generations",
     ]
-    with (output_dir / "run_results.csv").open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=run_fields, delimiter=";")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(
-                {
-                    "Instance": row["instance"],
-                    "Run": row["run"],
-                    "Seed": row["seed"],
-                    "Fitness": row["fitness"],
-                    "DeterministicMakespan": row["deterministic_makespan"],
-                    "FinalRobustStdev": row["final_robust_stdev"],
-                    "FinalR": row["final_R"],
-                    "FunctionEvaluations": row["function_evaluations"],
-                    "RawFunctionEvaluations": row["raw_function_evaluations"],
-                    "RuntimeSeconds": row["runtime_s"],
-                    "Generations": row["generations"],
-                }
-            )
+    def write_runs(path: Path) -> None:
+        with path.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=run_fields, delimiter=";")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(
+                    {
+                        "Instance": row["instance"],
+                        "Run": row["run"],
+                        "Seed": row["seed"],
+                        "Fitness": row["fitness"],
+                        "DeterministicMakespan": row["deterministic_makespan"],
+                        "FinalRobustStdev": row["final_robust_stdev"],
+                        "FinalR": row["final_R"],
+                        "FunctionEvaluations": row["function_evaluations"],
+                        "RawFunctionEvaluations": row["raw_function_evaluations"],
+                        "RuntimeSeconds": row["runtime_s"],
+                        "Generations": row["generations"],
+                    }
+                )
+
+    replace_atomically(output_dir / "run_results.csv", write_runs)
 
     summary_fields = [
         "Instance",
@@ -460,28 +474,31 @@ def write_csv_outputs(
         "MeanRuntimeSeconds",
         "MeanFunctionEvaluations",
     ]
-    with (output_dir / "instance_summary.csv").open("w", encoding="utf-8", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=summary_fields, delimiter=";")
-        writer.writeheader()
-        for instance in sorted({row["instance"] for row in rows}):
-            instance_rows = [row for row in rows if row["instance"] == instance]
-            fitnesses = [float(row["fitness"]) for row in instance_rows]
-            best = min(instance_rows, key=lambda row: float(row["fitness"]))
-            writer.writerow(
-                {
-                    "Instance": instance,
-                    "SuccessfulRuns": len(instance_rows),
-                    "BestFitness": min(fitnesses),
-                    "MeanFitness": statistics.mean(fitnesses),
-                    "StdFitness": statistics.stdev(fitnesses) if len(fitnesses) > 1 else 0.0,
-                    "BestRun": best["run"],
-                    "BestSeed": best["seed"],
-                    "MeanRuntimeSeconds": statistics.mean(float(row["runtime_s"]) for row in instance_rows),
-                    "MeanFunctionEvaluations": statistics.mean(
-                        int(row["function_evaluations"]) for row in instance_rows
-                    ),
-                }
-            )
+    def write_summary(path: Path) -> None:
+        with path.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=summary_fields, delimiter=";")
+            writer.writeheader()
+            for instance in sorted({row["instance"] for row in rows}):
+                instance_rows = [row for row in rows if row["instance"] == instance]
+                fitnesses = [float(row["fitness"]) for row in instance_rows]
+                best = min(instance_rows, key=lambda row: float(row["fitness"]))
+                writer.writerow(
+                    {
+                        "Instance": instance,
+                        "SuccessfulRuns": len(instance_rows),
+                        "BestFitness": min(fitnesses),
+                        "MeanFitness": statistics.mean(fitnesses),
+                        "StdFitness": statistics.stdev(fitnesses) if len(fitnesses) > 1 else 0.0,
+                        "BestRun": best["run"],
+                        "BestSeed": best["seed"],
+                        "MeanRuntimeSeconds": statistics.mean(float(row["runtime_s"]) for row in instance_rows),
+                        "MeanFunctionEvaluations": statistics.mean(
+                            int(row["function_evaluations"]) for row in instance_rows
+                        ),
+                    }
+                )
+
+    replace_atomically(output_dir / "instance_summary.csv", write_summary)
 
     manifest = {
         "scenario": 2,
@@ -503,9 +520,12 @@ def write_csv_outputs(
             "when available, otherwise final run function_evaluations."
         ),
     }
-    with (output_dir / "submission_manifest.json").open("w", encoding="utf-8") as fh:
-        json.dump(manifest, fh, indent=2, sort_keys=True)
-        fh.write("\n")
+    def write_manifest(path: Path) -> None:
+        with path.open("w", encoding="utf-8") as fh:
+            json.dump(manifest, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+
+    replace_atomically(output_dir / "submission_manifest.json", write_manifest)
 
 
 def main() -> int:
@@ -579,6 +599,32 @@ def main() -> int:
                 flush=True,
             )
 
+        def record_success(task: dict[str, Any], row: dict[str, Any]) -> None:
+            append_jsonl(raw_path, row)
+            completed[(task["instance"], int(task["run"]))] = row
+            write_csv_outputs(
+                args.output_dir,
+                list(completed.values()),
+                args,
+                args.uncertainty_json,
+                expected_instances=len(instance_files),
+            )
+            print(
+                f"[{task['progress_index']}/{task['total_expected']}] "
+                f"done instance={task['instance']} run={task['run']} "
+                f"fitness={row['fitness']}",
+                flush=True,
+            )
+
+        if completed:
+            write_csv_outputs(
+                args.output_dir,
+                list(completed.values()),
+                args,
+                args.uncertainty_json,
+                expected_instances=len(instance_files),
+            )
+
         if tasks and min(args.workers, len(tasks)) == 1:
             for task in tasks:
                 print(
@@ -588,14 +634,7 @@ def main() -> int:
                 )
                 try:
                     row = solve_run_task(task)
-                    append_jsonl(raw_path, row)
-                    completed[(task["instance"], int(task["run"]))] = row
-                    print(
-                        f"[{task['progress_index']}/{task['total_expected']}] "
-                        f"done instance={task['instance']} run={task['run']} "
-                        f"fitness={row['fitness']}",
-                        flush=True,
-                    )
+                    record_success(task, row)
                 except Exception as exc:
                     record_failure(task, exc)
         elif tasks:
@@ -605,14 +644,7 @@ def main() -> int:
                     task = future_to_task[future]
                     try:
                         row = future.result()
-                        append_jsonl(raw_path, row)
-                        completed[(task["instance"], int(task["run"]))] = row
-                        print(
-                            f"[{task['progress_index']}/{task['total_expected']}] "
-                            f"done instance={task['instance']} run={task['run']} "
-                            f"fitness={row['fitness']}",
-                            flush=True,
-                        )
+                        record_success(task, row)
                     except Exception as exc:
                         record_failure(task, exc)
 
