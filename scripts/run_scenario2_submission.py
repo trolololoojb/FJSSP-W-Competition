@@ -88,6 +88,12 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Parallel worker processes used inside each stochastic simulation call.",
     )
+    parser.add_argument(
+        "--time-limit-s",
+        type=int,
+        default=None,
+        help="Optional wall-clock time limit in seconds for each GA run.",
+    )
     parser.add_argument("--max-function-evaluations", type=int, default=5_000_000)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--allow-failed-runs", action="store_true")
@@ -236,7 +242,7 @@ def solve_run(
     )
     run_config = {
         "max_generations": None,
-        "time_limit_s": None,
+        "time_limit_s": args.time_limit_s,
         "max_function_evaluations": args.max_function_evaluations,
         "progress_interval_evaluations": 50_000,
         "keep_multiple": False,
@@ -332,6 +338,7 @@ def solve_run_task(task: dict[str, Any]) -> dict[str, Any]:
     args = argparse.Namespace(
         internal_simulations=task["internal_simulations"],
         final_simulations=task["final_simulations"],
+        time_limit_s=task["time_limit_s"],
         max_function_evaluations=task["max_function_evaluations"],
         surrogate_n_jobs=task["surrogate_n_jobs"],
         disable_local_search=task["disable_local_search"],
@@ -518,6 +525,7 @@ def write_csv_outputs(
         "n_runs_per_instance": args.n_runs,
         "total_expected_runs": expected_instances * args.n_runs,
         "total_successful_runs": len(rows),
+        "time_limit_s": args.time_limit_s,
         "max_function_evaluations": args.max_function_evaluations,
         "internal_simulations": args.internal_simulations,
         "final_simulations": args.final_simulations,
@@ -579,6 +587,7 @@ def main() -> int:
                         "uncertainty_parameters": uncertainty_parameters,
                         "internal_simulations": args.internal_simulations,
                         "final_simulations": args.final_simulations,
+                        "time_limit_s": args.time_limit_s,
                         "max_function_evaluations": args.max_function_evaluations,
                         "surrogate_n_jobs": args.surrogate_n_jobs,
                         "simulation_workers": args.simulation_workers,
