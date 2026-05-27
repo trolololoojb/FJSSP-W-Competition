@@ -21,10 +21,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from solver.GA.parallel_simulation import run_n_simulations_parallel
 from solver.GA.wfjssp_ga import build_ga_from_worker_encoding, is_simulatable_schedule
 from util.benchmark_parser import WorkerBenchmarkParser
 from util.evaluation import makespan, translate
-from util.graph import run_n_simulations
 
 
 SCENARIO = 2
@@ -82,6 +82,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-runs", type=int, default=10)
     parser.add_argument("--internal-simulations", type=int, default=INTERNAL_EVAL_SIMULATIONS)
     parser.add_argument("--final-simulations", type=int, default=FINAL_EVAL_SIMULATIONS)
+    parser.add_argument(
+        "--simulation-workers",
+        type=int,
+        default=1,
+        help="Parallel worker processes used inside each stochastic simulation call.",
+    )
     parser.add_argument("--max-function-evaluations", type=int, default=5_000_000)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--allow-failed-runs", action="store_true")
@@ -225,6 +231,7 @@ def solve_run(
             "use_stochastic_evaluation": True,
             "uncertainty_parameters": uncertainty_parameters,
             "n_simulations": args.internal_simulations,
+            "simulation_workers": args.simulation_workers,
         }
     )
     run_config = {
@@ -258,7 +265,7 @@ def solve_run(
         raise ValueError("Best decoded schedule is not simulatable.")
 
     try:
-        final_results, robust_makespan, robust_makespan_stdev, final_r = run_n_simulations(
+        final_results, robust_makespan, robust_makespan_stdev, final_r = run_n_simulations_parallel(
             start_times,
             end_times,
             machines,
@@ -269,9 +276,11 @@ def solve_run(
             args.final_simulations,
             uncertainty_source=UNCERTAINTY_SOURCE,
             processing_times=True,
+            workers=args.simulation_workers,
+            seed=seed + 2_000_000_000,
         )
     except TypeError:
-        final_results, robust_makespan, robust_makespan_stdev, final_r = run_n_simulations(
+        final_results, robust_makespan, robust_makespan_stdev, final_r = run_n_simulations_parallel(
             start_times,
             end_times,
             machines,
@@ -281,6 +290,8 @@ def solve_run(
             uncertainty_parameters,
             args.final_simulations,
             processing_times=True,
+            workers=args.simulation_workers,
+            seed=seed + 2_000_000_000,
         )
 
     raw_function_evaluations = int(result["function_evaluations"])
@@ -324,6 +335,7 @@ def solve_run_task(task: dict[str, Any]) -> dict[str, Any]:
         max_function_evaluations=task["max_function_evaluations"],
         surrogate_n_jobs=task["surrogate_n_jobs"],
         disable_local_search=task["disable_local_search"],
+        simulation_workers=task["simulation_workers"],
     )
     return solve_run(
         task["instance"],
@@ -511,6 +523,7 @@ def write_csv_outputs(
         "final_simulations": args.final_simulations,
         "workers": args.workers,
         "surrogate_n_jobs": args.surrogate_n_jobs,
+        "simulation_workers": args.simulation_workers,
         "local_search_enabled": not bool(args.disable_local_search),
         "uncertainty_json": str(uncertainty_json),
         "official_csv": str(output_dir / "submission_scenario2.csv"),
@@ -568,6 +581,7 @@ def main() -> int:
                         "final_simulations": args.final_simulations,
                         "max_function_evaluations": args.max_function_evaluations,
                         "surrogate_n_jobs": args.surrogate_n_jobs,
+                        "simulation_workers": args.simulation_workers,
                         "disable_local_search": args.disable_local_search,
                     }
                 )

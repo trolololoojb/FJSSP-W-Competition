@@ -10,7 +10,7 @@ import time
 import numpy as np
 
 from util.evaluation import translate, makespan
-from util.graph import run_n_simulations
+from solver.GA.parallel_simulation import run_n_simulations_parallel
 from solver.GA.rl_mutation_agent import RLMutationAgent, RLMutationAgentConfig
 from solver.GA.surrogate_features import featurize_candidate
 from solver.GA.surrogate_qrf import QRFSurrogate, SurrogateSample
@@ -127,6 +127,7 @@ class WorkerGAConfig:
     use_stochastic_evaluation: bool = False # whether to use stochastic evaluation with simulations to estimate robust makespan, instead of deterministic evaluation. If True, the fitness will include "makespan" as the estimated robust makespan, "robust_makespan_stdev" as the standard deviation of the makespan across simulations, and "R" as the robustness measure (e.g. the 95th percentile of the makespan distribution). The translate function will be used to get start times and assignments, and then run_n_simulations will be called to perform the stochastic evaluation.
     uncertainty_parameters: Optional[List[List[float]]] = None # optional parameters for the uncertainty model used in stochastic evaluation, expected shape [n_ops][n_machines], where each entry is a parameter (e.g. standard deviation) for the processing time distribution of that operation on that machine. If None, no uncertainty will be applied and the deterministic durations will be used in the simulations.
     n_simulations: int = 100 # number of simulations to run for stochastic evaluation when use_stochastic_evaluation is True
+    simulation_workers: int = 1 # parallel worker processes for stochastic simulation chunks
     use_surrogate_evaluation: bool = False
     surrogate_warmup_real_candidates: int = 300
     surrogate_top_fraction: float = 0.02
@@ -869,7 +870,8 @@ class WFJSSPGA:
                 ind.fitness["candidate_id"] = candidate_id
                 return math.inf
             try:
-                results, robust_makespan, robust_makespan_stdev, R = run_n_simulations(
+                simulation_seed = self.rng.randrange(0, 2**32)
+                results, robust_makespan, robust_makespan_stdev, R = run_n_simulations_parallel(
                     decoded["start_times"],
                     decoded["end_times"],
                     decoded["machine_assignments"],
@@ -878,7 +880,9 @@ class WFJSSPGA:
                     self.config.durations,
                     self.config.uncertainty_parameters,
                     self.config.n_simulations,
-                    processing_times=True
+                    processing_times=True,
+                    workers=self.config.simulation_workers,
+                    seed=simulation_seed,
                 )
             except (RecursionError, Exception):
                 ind.fitness["makespan"] = math.inf

@@ -6,3 +6,5 @@ results/scenario2_submission/
 wandb
 .codex
 results/wfjssp_ga_variant_comparison
+chunks
+logs
