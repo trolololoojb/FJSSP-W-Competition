@@ -8,3 +8,6 @@ wandb
 results/wfjssp_ga_variant_comparison
 chunks
 logs
+results_old
+logs_old
+logs_parallel

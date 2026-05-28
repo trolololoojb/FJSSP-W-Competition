@@ -1,0 +1,19 @@
+{
+  "final_simulations": 50,
+  "function_evaluations_note": "FunctionEvaluations uses best_found_function_evaluations from WFJSSPGA.run when available, otherwise final run function_evaluations.",
+  "internal_simulations": 10,
+  "local_search_enabled": true,
+  "max_function_evaluations": 5000000,
+  "metadata_csv": "results/scenario2_instances/2a_Hurink_sdata_54_workers/submission_scenario2_with_metadata.csv",
+  "n_instances": 1,
+  "n_runs_per_instance": 10,
+  "official_csv": "results/scenario2_instances/2a_Hurink_sdata_54_workers/submission_scenario2.csv",
+  "scenario": 2,
+  "simulation_workers": 2,
+  "surrogate_n_jobs": 2,
+  "time_limit_s": 129600,
+  "total_expected_runs": 10,
+  "total_successful_runs": 10,
+  "uncertainty_json": "config/scenario2_uncertainty.json",
+  "workers": 10
+}
