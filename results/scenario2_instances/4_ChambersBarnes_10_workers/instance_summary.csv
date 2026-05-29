@@ -1,0 +1,2 @@
+Instance;SuccessfulRuns;BestFitness;MeanFitness;StdFitness;BestRun;BestSeed;MeanRuntimeSeconds;MeanFunctionEvaluations
+4_ChambersBarnes_10_workers.fjs;10;2042.8155554510897;2270.011249302438;96.01206926829053;5;1004;115621.41309027672;2463962

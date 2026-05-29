@@ -1,0 +1,2 @@
+Instance;SuccessfulRuns;BestFitness;MeanFitness;StdFitness;BestRun;BestSeed;MeanRuntimeSeconds;MeanFunctionEvaluations
+3_DPpaulli_1_workers.fjs;10;6201.139129223383;6443.227268975431;196.38540928887375;1;1000;122272.41062254905;1835127

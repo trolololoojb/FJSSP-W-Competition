@@ -1,2 +1,2 @@
 Instance;SuccessfulRuns;BestFitness;MeanFitness;StdFitness;BestRun;BestSeed;MeanRuntimeSeconds;MeanFunctionEvaluations
-2c_Hurink_rdata_28_workers.fjs;1;2192.9488624807905;2192.9488624807905;0.0;9;1008;76512.88697266579;119480
+2c_Hurink_rdata_28_workers.fjs;10;2006.9865963068166;2209.7852823916546;100.22526062632417;6;1005;85531.68971383572;1081110

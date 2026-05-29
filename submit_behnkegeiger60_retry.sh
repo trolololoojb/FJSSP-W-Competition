@@ -27,7 +27,7 @@ FINAL_SIMULATIONS=50
 MAX_FUNCTION_EVALUATIONS=5000000
 
 PARTITION="mpp.share"
-MEM_PER_CPU="3900M"
+MEM_PER_CPU="4G"
 
 # 2 Runs pro SLURM-Job.
 # Pro Run:
@@ -36,12 +36,12 @@ MEM_PER_CPU="3900M"
 #   2 Surrogate-Jobs
 # = ca. 13 CPUs pro Run
 # => 2 Runs * 13 = 26 CPUs pro Job
-CPUS_PER_JOB=26
+CPUS_PER_JOB=66
 SIM_WORKERS_PER_RUN=10
-SURROGATE_N_JOBS_PER_RUN=2
+SURROGATE_N_JOBS_PER_RUN=10
 
 TASK_DIR="chunks"
-RESULT_TASK_DIR="results/scenario2_task_results"
+RESULT_TASK_DIR="results/scenario2_task_results_behnkegeiger_retry"
 PAIR_FILE="${TASK_DIR}/behnkegeiger60_retry_pairs.tsv"
 
 if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
@@ -82,7 +82,7 @@ EOF
     echo "  squeue -u \$USER"
     echo
     echo "Progress:"
-    echo "  find results/scenario2_task_results/0_BehnkeGeiger_60_workers -name result.json | wc -l"
+    echo "  find $RESULT_TASK_DIR/0_BehnkeGeiger_60_workers -name result.json | wc -l"
     echo
     echo "Errors:"
     echo "  grep -R '\"status\": \"error\"' results/scenario2_task_results/0_BehnkeGeiger_60_workers -n"
