@@ -1,0 +1,2 @@
+Instance;Run;Seed;Fitness;DeterministicMakespan;FinalRobustStdev;FinalR;FunctionEvaluations;RawFunctionEvaluations;RuntimeSeconds;Generations
+2c_Hurink_rdata_28_workers.fjs;9;1008;2192.9488624807905;1027.0;35.46826236964547;2.135295873885872;119480;5000000;76512.88697266579;65381
