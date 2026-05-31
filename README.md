@@ -53,9 +53,6 @@ scripts/validate_scenario2_submission.py
 submit_scenario2_instances.sh
     Slurm array script for running all 30 instances and merging raw results.
 
-submit_behnkegeiger60_retry.sh
-    Separate retry script for the BehnkeGeiger60 instance.
-
 config/scenario2_uncertainty.json
     Fixed uncertainty parameters used during optimization, final evaluation, and CSV export.
 
@@ -255,7 +252,7 @@ The submission archive should contain:
 
 ```text
 README.md
-technical_report_scenario2.pdf
+technical_report.pdf
 config/scenario2_uncertainty.json
 results/scenario2_submission/submission_scenario2.csv
 results/scenario2_submission/submission_scenario2_with_metadata.csv
@@ -266,7 +263,6 @@ util/
 instances/
 requirements.txt
 submit_scenario2_instances.sh
-submit_behnkegeiger60_retry.sh
 used_nodes.txt
 used_nodes_hardware.txt
 used_nodes_sinfo.txt
