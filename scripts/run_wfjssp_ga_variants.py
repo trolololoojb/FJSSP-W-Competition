@@ -87,6 +87,7 @@ def read_variant_csv(path: Path, variant: dict[str, Any], csv_name: str) -> pd.D
 
 def write_aggregate_outputs(base_results_dir: Path, variant_outputs: list[tuple[dict[str, Any], Path]]) -> None:
     import pandas as pd
+    from util.hyperparameters import write_hyperparameters_txt
 
     aggregate_specs = [
         ("run_results.csv", "all_run_results.csv"),
@@ -102,6 +103,12 @@ def write_aggregate_outputs(base_results_dir: Path, variant_outputs: list[tuple[
         frames = [frame for frame in frames if not frame.empty]
         if frames:
             pd.concat(frames, ignore_index=True).to_csv(base_results_dir / target_name, index=False)
+
+    write_hyperparameters_txt(
+        base_results_dir,
+        run_metadata={"variants": [variant for variant, _ in variant_outputs]},
+        notes=["Aggregate directory for WFJSSP-GA variant comparison outputs."],
+    )
 
 
 def main() -> None:

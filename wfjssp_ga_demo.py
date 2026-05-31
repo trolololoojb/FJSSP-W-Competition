@@ -18,6 +18,7 @@ from solver.GA.wfjssp_ga import build_ga_from_worker_encoding, is_simulatable_sc
 from util.benchmark_parser import WorkerBenchmarkParser
 from util.evaluation import makespan, translate
 from util.graph import run_n_simulations
+from util.hyperparameters import write_hyperparameters_txt
 from util.uncertainty import create_uncertainty_vector
 
 
@@ -583,6 +584,28 @@ def write_outputs(results_df, summary_df, ranking_df):
 
     with solutions_json_path.open("w", encoding="utf-8") as fh:
         json.dump(solutions_payload, fh)
+
+    write_hyperparameters_txt(
+        RESULTS_DIR,
+        run_metadata={
+            "scenario": SCENARIO,
+            "strict_competition_mode": STRICT_COMPETITION_MODE,
+            "n_independent_runs": N_INDEPENDENT_RUNS,
+            "selected_instances": SELECTED_INSTANCES,
+            "run_seeds": RUN_SEEDS,
+            "internal_eval_simulations": INTERNAL_EVAL_SIMULATIONS,
+            "final_eval_simulations": FINAL_EVAL_SIMULATIONS,
+            "uncertainty_source": UNCERTAINTY_SOURCE,
+            "official_uncertainty_file": OFFICIAL_UNCERTAINTY_FILE,
+            "allow_demo_uncertainty_fallback": ALLOW_DEMO_UNCERTAINTY_FALLBACK,
+            "demo_uncertainty_seed": DEMO_UNCERTAINTY_SEED,
+            "demo_uncertainty_factor": DEMO_UNCERTAINTY_FACTOR,
+            "demo_uncertainty_offset": DEMO_UNCERTAINTY_OFFSET,
+        },
+        ga_config=GA_CONFIG,
+        run_config=RUN_CONFIG,
+        notes=["Effective hyperparameters for the WFJSSP-GA demo result directory."],
+    )
 
     return {
         "run_results": compact_results_path,

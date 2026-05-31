@@ -25,6 +25,7 @@ from solver.GA.parallel_simulation import run_n_simulations_parallel
 from solver.GA.wfjssp_ga import build_ga_from_worker_encoding, is_simulatable_schedule
 from util.benchmark_parser import WorkerBenchmarkParser
 from util.evaluation import makespan, translate
+from util.hyperparameters import result_hyperparameter_dir, write_hyperparameters_txt
 
 
 SCENARIO = 2
@@ -205,15 +206,7 @@ def resolve_surrogate_n_jobs(workers: int, requested_n_jobs: int | None) -> int:
     return 1 if workers > 1 else -1
 
 
-def solve_run(
-    instance_name: str,
-    run: int,
-    seed: int,
-    encoding: Any,
-    uncertainty_parameters: list[list[float]],
-    args: argparse.Namespace,
-) -> dict[str, Any]:
-    start_wall = time.time()
+def effective_ga_config(args: argparse.Namespace, seed: int | None = None) -> dict[str, Any]:
     ga_kwargs = dict(GA_CONFIG)
     if getattr(args, "disable_local_search", False):
         ga_kwargs.update(
@@ -235,12 +228,15 @@ def solve_run(
             "seed": seed,
             "rl_seed": seed,
             "use_stochastic_evaluation": True,
-            "uncertainty_parameters": uncertainty_parameters,
             "n_simulations": args.internal_simulations,
             "simulation_workers": args.simulation_workers,
         }
     )
-    run_config = {
+    return ga_kwargs
+
+
+def effective_run_config(args: argparse.Namespace) -> dict[str, Any]:
+    return {
         "max_generations": None,
         "time_limit_s": args.time_limit_s,
         "max_function_evaluations": args.max_function_evaluations,
@@ -248,6 +244,20 @@ def solve_run(
         "keep_multiple": False,
         "do_restart": False,
     }
+
+
+def solve_run(
+    instance_name: str,
+    run: int,
+    seed: int,
+    encoding: Any,
+    uncertainty_parameters: list[list[float]],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    start_wall = time.time()
+    ga_kwargs = effective_ga_config(args, seed=seed)
+    ga_kwargs["uncertainty_parameters"] = uncertainty_parameters
+    run_config = effective_run_config(args)
 
     ga = build_ga_from_worker_encoding(encoding, **ga_kwargs)
     result = ga.run(**run_config)
@@ -532,7 +542,7 @@ def write_csv_outputs(
         "workers": args.workers,
         "surrogate_n_jobs": args.surrogate_n_jobs,
         "simulation_workers": args.simulation_workers,
-        "local_search_enabled": not bool(args.disable_local_search),
+        "local_search_enabled": not bool(getattr(args, "disable_local_search", False)),
         "uncertainty_json": str(uncertainty_json),
         "official_csv": str(output_dir / "submission_scenario2.csv"),
         "metadata_csv": str(output_dir / "submission_scenario2_with_metadata.csv"),
@@ -540,6 +550,8 @@ def write_csv_outputs(
             "FunctionEvaluations uses best_found_function_evaluations from WFJSSPGA.run "
             "when available, otherwise final run function_evaluations."
         ),
+        "ga_config": effective_ga_config(args),
+        "run_config": effective_run_config(args),
     }
     def write_manifest(path: Path) -> None:
         with path.open("w", encoding="utf-8") as fh:
@@ -547,6 +559,34 @@ def write_csv_outputs(
             fh.write("\n")
 
     replace_atomically(output_dir / "submission_manifest.json", write_manifest)
+    hyperparameter_dir = result_hyperparameter_dir(output_dir)
+    write_hyperparameters_txt(
+        hyperparameter_dir,
+        run_metadata={
+            "scenario": 2,
+            "output_dir": str(output_dir),
+            "hyperparameter_dir": str(hyperparameter_dir),
+            "n_instances": expected_instances,
+            "n_runs_per_instance": args.n_runs,
+            "total_expected_runs": expected_instances * args.n_runs,
+            "total_successful_runs": len(rows),
+            "internal_simulations": args.internal_simulations,
+            "final_simulations": args.final_simulations,
+            "workers": args.workers,
+            "simulation_workers": args.simulation_workers,
+            "surrogate_n_jobs": args.surrogate_n_jobs,
+            "time_limit_s": args.time_limit_s,
+            "max_function_evaluations": args.max_function_evaluations,
+            "local_search_enabled": not bool(getattr(args, "disable_local_search", False)),
+            "uncertainty_json": str(uncertainty_json),
+        },
+        ga_config=manifest["ga_config"],
+        run_config=manifest["run_config"],
+        notes=[
+            "Effective GA hyperparameters for this result directory.",
+            "Per-run seeds are listed in run_results.csv.",
+        ],
+    )
 
 
 def main() -> int:
