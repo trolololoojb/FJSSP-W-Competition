@@ -1,0 +1,59 @@
+Hyperparameters
+===============
+
+[notes]
+HPO trial config. RL mutation control is disabled.
+One Slurm array task evaluates one complete configuration for this phase.
+
+[run]
+config_id: TPE0017_0a28dee002
+instances: ["0_BehnkeGeiger_42_workers.fjs","0_BehnkeGeiger_46_workers.fjs","0_BehnkeGeiger_60_workers.fjs","1_Brandimarte_14_workers.fjs","2a_Hurink_sdata_1_workers.fjs","2a_Hurink_sdata_18_workers.fjs","2a_Hurink_sdata_54_workers.fjs","2a_Hurink_sdata_61_workers.fjs","2a_Hurink_sdata_63_workers.fjs","2c_Hurink_rdata_28_workers.fjs","2c_Hurink_rdata_38_workers.fjs","2c_Hurink_rdata_50_workers.fjs"]
+instances_dir: instances/fjssp-w
+phase: tpe
+phase_spec: {"final_simulations":20,"instance_count":12,"instance_pool":"train","max_function_evaluations":750000,"n_configs":72,"run_count":3,"source_phase":"screening","time_limit_s":7200}
+simulation_workers: 2
+surrogate_n_jobs: 2
+tasks_pending_at_start: 36
+tasks_total: 36
+uncertainty_json: config/scenario2_uncertainty.json
+workers: 10
+
+[ga_config]
+elitism_rate: 0.05
+enable_rl_mutation_control: false
+local_search_interval: 30
+local_search_min_predicted_improvement: 5.0
+local_search_neighbors_per_origin: 200
+local_search_origin_count: 2
+local_search_random_k: 2
+local_search_real_eval_limit_per_origin: 8
+local_search_top_k: 4
+local_search_uncertain_k: 4
+offspring_amount: 1440
+population_size: 360
+restart_generations: 800
+surrogate_max_features: sqrt
+surrogate_max_retrain_interval_real_candidates: 1000
+surrogate_max_training_samples: 3000
+surrogate_min_real_per_generation: 5
+surrogate_min_samples_leaf: 5
+surrogate_n_estimators: 200
+surrogate_n_jobs: -1
+surrogate_random_fraction: 0.0025
+surrogate_retrain_interval_growth_factor: 2.0
+surrogate_retrain_interval_growth_samples: 5000
+surrogate_retrain_interval_real_candidates: 100
+surrogate_top_fraction: 0.01
+surrogate_uncertain_fraction: 0.0075
+surrogate_warmup_real_candidates: 600
+use_surrogate_evaluation: true
+
+[run_config]
+do_restart: false
+final_simulations: 20
+internal_simulations: 10
+keep_multiple: false
+max_function_evaluations: 750000
+max_generations: None
+progress_interval_evaluations: 100000
+time_limit_s: 7200

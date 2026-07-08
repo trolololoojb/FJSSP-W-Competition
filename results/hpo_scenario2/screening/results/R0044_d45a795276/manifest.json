@@ -1,0 +1,31 @@
+{
+  "config_id": "R0044_d45a795276",
+  "instances": [
+    "0_BehnkeGeiger_42_workers.fjs",
+    "0_BehnkeGeiger_46_workers.fjs",
+    "0_BehnkeGeiger_60_workers.fjs",
+    "1_Brandimarte_14_workers.fjs",
+    "2a_Hurink_sdata_1_workers.fjs",
+    "2a_Hurink_sdata_18_workers.fjs",
+    "2a_Hurink_sdata_54_workers.fjs",
+    "2a_Hurink_sdata_61_workers.fjs"
+  ],
+  "instances_dir": "instances/fjssp-w",
+  "phase": "screening",
+  "phase_spec": {
+    "final_simulations": 20,
+    "instance_count": 8,
+    "instance_pool": "train",
+    "max_function_evaluations": 250000,
+    "n_configs": 48,
+    "run_count": 2,
+    "source_phase": null,
+    "time_limit_s": 7200
+  },
+  "simulation_workers": 2,
+  "surrogate_n_jobs": 2,
+  "tasks_pending_at_start": 16,
+  "tasks_total": 16,
+  "uncertainty_json": "config/scenario2_uncertainty.json",
+  "workers": 10
+}

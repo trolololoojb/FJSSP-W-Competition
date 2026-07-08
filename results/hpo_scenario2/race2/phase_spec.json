@@ -1,0 +1,10 @@
+{
+  "final_simulations": 50,
+  "instance_count": 24,
+  "instance_pool": "train_val",
+  "max_function_evaluations": 3000000,
+  "n_configs": 8,
+  "run_count": 6,
+  "source_phase": "race1",
+  "time_limit_s": null
+}

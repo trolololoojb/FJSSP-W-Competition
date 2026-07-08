@@ -1,0 +1,35 @@
+{
+  "config_id": "TPE0025_e8db426b41",
+  "instances": [
+    "0_BehnkeGeiger_42_workers.fjs",
+    "0_BehnkeGeiger_46_workers.fjs",
+    "0_BehnkeGeiger_60_workers.fjs",
+    "1_Brandimarte_14_workers.fjs",
+    "2a_Hurink_sdata_1_workers.fjs",
+    "2a_Hurink_sdata_18_workers.fjs",
+    "2a_Hurink_sdata_54_workers.fjs",
+    "2a_Hurink_sdata_61_workers.fjs",
+    "2a_Hurink_sdata_63_workers.fjs",
+    "2c_Hurink_rdata_28_workers.fjs",
+    "2c_Hurink_rdata_38_workers.fjs",
+    "2c_Hurink_rdata_50_workers.fjs"
+  ],
+  "instances_dir": "instances/fjssp-w",
+  "phase": "tpe",
+  "phase_spec": {
+    "final_simulations": 20,
+    "instance_count": 12,
+    "instance_pool": "train",
+    "max_function_evaluations": 750000,
+    "n_configs": 72,
+    "run_count": 3,
+    "source_phase": "screening",
+    "time_limit_s": 7200
+  },
+  "simulation_workers": 2,
+  "surrogate_n_jobs": 2,
+  "tasks_pending_at_start": 36,
+  "tasks_total": 36,
+  "uncertainty_json": "config/scenario2_uncertainty.json",
+  "workers": 10
+}

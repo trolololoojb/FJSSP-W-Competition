@@ -1,0 +1,29 @@
+{
+  "config_id": "final_rank03_race2_rank04_race1_rank08_TPE0071_8834ed6804",
+  "instances": [
+    "1_Brandimarte_12_workers.fjs",
+    "2a_Hurink_sdata_40_workers.fjs",
+    "2b_Hurink_edata_6_workers.fjs",
+    "2d_Hurink_vdata_18_workers.fjs",
+    "3_DPpaulli_18_workers.fjs",
+    "6_Fattahi_20_workers.fjs"
+  ],
+  "instances_dir": "instances/fjssp-w",
+  "phase": "final",
+  "phase_spec": {
+    "final_simulations": 50,
+    "instance_count": 6,
+    "instance_pool": "holdout",
+    "max_function_evaluations": 5000000,
+    "n_configs": 5,
+    "run_count": 10,
+    "source_phase": "race2",
+    "time_limit_s": 7200
+  },
+  "simulation_workers": 2,
+  "surrogate_n_jobs": 2,
+  "tasks_pending_at_start": 60,
+  "tasks_total": 60,
+  "uncertainty_json": "config/scenario2_uncertainty.json",
+  "workers": 10
+}

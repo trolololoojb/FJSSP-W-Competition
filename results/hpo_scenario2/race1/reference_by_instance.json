@@ -1,0 +1,20 @@
+{
+  "0_BehnkeGeiger_42_workers.fjs": 183.35895599056738,
+  "0_BehnkeGeiger_46_workers.fjs": 283.2488168826104,
+  "0_BehnkeGeiger_60_workers.fjs": 1960.8086432670862,
+  "1_Brandimarte_14_workers.fjs": 1419.0509177091074,
+  "2a_Hurink_sdata_18_workers.fjs": 2727.287039253518,
+  "2a_Hurink_sdata_1_workers.fjs": 112.12475966575923,
+  "2a_Hurink_sdata_54_workers.fjs": 17981.780953783586,
+  "2a_Hurink_sdata_61_workers.fjs": 1977.026232643524,
+  "2a_Hurink_sdata_63_workers.fjs": 881.853936156303,
+  "2c_Hurink_rdata_28_workers.fjs": 2079.8583184543522,
+  "2c_Hurink_rdata_38_workers.fjs": 4305.46106800938,
+  "2c_Hurink_rdata_50_workers.fjs": 12834.846265354896,
+  "2d_Hurink_vdata_30_workers.fjs": 2756.5866597236927,
+  "3_DPpaulli_1_workers.fjs": 6070.327811543384,
+  "3_DPpaulli_9_workers.fjs": 5462.306866793597,
+  "4_ChambersBarnes_10_workers.fjs": 2201.308556949252,
+  "5_Kacem_3_workers.fjs": 15.200258589516556,
+  "5_Kacem_4_workers.fjs": 30.704947309255033
+}
