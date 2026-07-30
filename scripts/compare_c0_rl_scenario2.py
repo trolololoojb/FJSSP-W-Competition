@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 VARIANTS = ("c0_no_rl", "c0_with_rl")
+HPO_WINNER_INTERNAL_SIMULATIONS = 12
 
 
 def variant_ga_config(variant: str, surrogate_n_jobs: int) -> dict[str, Any]:
@@ -223,7 +224,35 @@ def run_task(args: argparse.Namespace) -> None:
         "surrogate_n_jobs": args.surrogate_n_jobs,
         "ga_config": ga_config,
     }
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    manifest_path = out_dir / "manifest.json"
+    if raw_path.exists() and raw_path.stat().st_size:
+        if not manifest_path.exists():
+            raise RuntimeError(
+                f"Cannot resume {raw_path}: results exist without a manifest. "
+                "Use a fresh --output-root."
+            )
+        previous_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        compatibility_keys = (
+            "variant",
+            "instance",
+            "internal_simulations",
+            "final_simulations",
+            "max_function_evaluations",
+            "time_limit_s",
+            "ga_config",
+        )
+        mismatches = [
+            key
+            for key in compatibility_keys
+            if previous_manifest.get(key) != manifest.get(key)
+        ]
+        if mismatches:
+            raise RuntimeError(
+                f"Cannot mix results with a changed experiment configuration in {out_dir}; "
+                f"mismatched manifest fields: {', '.join(mismatches)}. "
+                "Use a fresh --output-root."
+            )
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     run_tasks: list[dict[str, Any]] = []
     for run in range(1, args.n_runs + 1):
@@ -443,7 +472,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--uncertainty-json", type=Path, default=Path("config/scenario2_uncertainty.json"))
     parser.add_argument("--output-root", type=Path, default=Path("results/c0_rl_scenario2"))
     parser.add_argument("--n-runs", type=int, default=10)
-    parser.add_argument("--internal-simulations", type=int, default=10)
+    parser.add_argument(
+        "--internal-simulations",
+        type=int,
+        default=HPO_WINNER_INTERNAL_SIMULATIONS,
+        help="Simulations per stochastic GA evaluation (default: final HPO winner value).",
+    )
     parser.add_argument("--final-simulations", type=int, default=50)
     parser.add_argument("--max-function-evaluations", type=int, default=5_000_000)
     parser.add_argument("--time-limit-s", type=int, default=7_200)

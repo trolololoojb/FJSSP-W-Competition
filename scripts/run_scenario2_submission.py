@@ -29,37 +29,40 @@ from util.hyperparameters import result_hyperparameter_dir, write_hyperparameter
 
 
 SCENARIO = 2
-INTERNAL_EVAL_SIMULATIONS = 10
+INTERNAL_EVAL_SIMULATIONS = 12
 FINAL_EVAL_SIMULATIONS = 50
 UNCERTAINTY_SOURCE = "worker"
 
 GA_CONFIG: dict[str, Any] = {
-    "population_size": 200,
-    "offspring_amount": 1000,
+    # Final HPO rank 1:
+    # final_rank03_race2_rank04_race1_rank08_TPE0071_8834ed6804
+    # (results/hpo_scenario2/final/summary.csv)
+    "population_size": 360,
+    "offspring_amount": 2160,
     "use_surrogate_evaluation": True,
-    "surrogate_warmup_real_candidates": 1000,
-    "surrogate_top_fraction": 0.02,
+    "surrogate_warmup_real_candidates": 600,
+    "surrogate_top_fraction": 0.01,
     "surrogate_uncertain_fraction": 0.005,
-    "surrogate_random_fraction": 0.005,
+    "surrogate_random_fraction": 0.0075,
     "surrogate_min_real_per_generation": 5,
-    "surrogate_retrain_interval_real_candidates": 100,
-    "surrogate_n_estimators": 300,
-    "surrogate_min_samples_leaf": 3,
+    "surrogate_retrain_interval_real_candidates": 75,
+    "surrogate_n_estimators": 200,
+    "surrogate_min_samples_leaf": 5,
     "surrogate_max_features": "sqrt",
     "surrogate_n_jobs": -1,
     "surrogate_max_training_samples": 5_000,
     "surrogate_retrain_interval_growth_samples": 5_000,
     "surrogate_retrain_interval_growth_factor": 2.0,
     "surrogate_max_retrain_interval_real_candidates": 1_000,
-    "local_search_interval": 20,
+    "local_search_interval": 10,
     "local_search_origin_count": 3,
-    "local_search_neighbors_per_origin": 200,
+    "local_search_neighbors_per_origin": 256,
     "local_search_top_k": 8,
-    "local_search_uncertain_k": 4,
-    "local_search_random_k": 3,
+    "local_search_uncertain_k": 6,
+    "local_search_random_k": 2,
     "local_search_real_eval_limit_per_origin": 12,
-    "local_search_min_predicted_improvement": 5.0,
-    "elitism_rate": 0.1,
+    "local_search_min_predicted_improvement": 2.0,
+    "elitism_rate": 0.05,
     "restart_generations": 800,
     "enable_rl_mutation_control": False,
     "rl_update_interval": 16,
