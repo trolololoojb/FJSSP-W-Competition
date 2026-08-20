@@ -1,0 +1,8 @@
+{
+  "complete": true,
+  "expected_runs": 300,
+  "experiment": "scenario2_hpo_rl_factorial",
+  "official_csv": "/bigwork/nhwijoha/FJSSP-W-Competition/results/hpo_rl_factorial_scenario2/competition_with_rl/submission_scenario2.csv",
+  "successful_runs": 300,
+  "variant": "competition_with_rl"
+}
