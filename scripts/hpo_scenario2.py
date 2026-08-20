@@ -718,7 +718,9 @@ def solve_hpo_run_task(task: dict[str, Any]) -> dict[str, Any]:
 
     ga_kwargs = dict(GA_CONFIG)
     ga_kwargs.update(task["ga_config"])
-    ga_kwargs["enable_rl_mutation_control"] = False
+    # The original HPO configs explicitly set this to False.  Keeping the
+    # default here also lets the small follow-up RL search reuse this runner.
+    ga_kwargs.setdefault("enable_rl_mutation_control", False)
     ga_kwargs["seed"] = seed
     ga_kwargs["rl_seed"] = seed
     ga_kwargs["use_stochastic_evaluation"] = True
@@ -810,6 +812,9 @@ def solve_hpo_run_task(task: dict[str, Any]) -> dict[str, Any]:
         "surrogate_fit_count": int(result.get("surrogate_fit_count", 0)),
         "surrogate_predictions": int(result.get("surrogate_predictions", 0)),
         "surrogate_real_candidate_evaluations": int(result.get("surrogate_real_candidate_evaluations", 0)),
+        "rl_enabled": bool(ga_kwargs.get("enable_rl_mutation_control", False)),
+        "rl_learning_rate": float(ga_kwargs.get("rl_learning_rate", 0.0)),
+        "rl_update_interval": int(ga_kwargs.get("rl_update_interval", 0)),
         "start_times": start_times,
         "machine_assignments": machines,
         "worker_assignments": workers,
