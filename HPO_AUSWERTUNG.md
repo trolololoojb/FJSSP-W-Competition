@@ -1,5 +1,11 @@
 # Wissenschaftliche Auswertung der Hyperparameteroptimierungen
 
+> **Nachtrag vom 28. August 2026:** Die anschließend ausgeführte vollständige
+> 2×2-Komponentenablation aus Surrogat-/Local-Search-Pipeline und RL ist separat in
+> [`KOMPONENTEN_ABLATIONSSTUDIE.md`](KOMPONENTEN_ABLATIONSSTUDIE.md) dokumentiert.
+> Sie beantwortet H1–H3 innerhalb des festgelegten Ablationsprotokolls, ist aufgrund
+> überlappender Auswahl- und Auswertungsinstanzen aber kein unabhängiger Holdout-Test.
+
 ## Kurzfazit
 
 Die Nicht-RL-HPO ist als **mehrstufiges Such- und Auswahlverfahren grundsätzlich sinnvoll aufgebaut**, ihre Verbesserung gegenüber der finalen Submission ist mit den abgelegten Aggregaten jedoch **nicht belastbar quantifizierbar**. Die als Holdout bezeichneten sechs Instanzen wurden zur Auswahl eines von fünf Finalisten benutzt und sind damit kein unabhängiger Testsatz für den anschließend benannten Sieger. Außerdem unterscheiden sich Baseline und HPO deutlich im Zeitbudget und teilweise in der stochastischen Auswertung.
@@ -181,4 +187,3 @@ Die vorhandenen Resultate rechtfertigen die Auswahl je eines **vielversprechende
 Für eine wissenschaftliche Arbeit sollte daher formuliert werden:
 
 > Die Hyperparameteroptimierung identifizierte unter den untersuchten Kandidaten die angegebenen Siegerkonfigurationen. Aufgrund unterschiedlicher Budgets und der Nutzung der berichteten Instanzen zur Konfigurationsauswahl kann aus den vorliegenden Daten noch keine unverzerrte Verbesserung gegenüber der finalen Submission beziehungsweise kein isolierter RL-Effekt abgeleitet werden. Diese Aussagen erfordern den beschriebenen unabhängigen Bestätigungstest.
-
