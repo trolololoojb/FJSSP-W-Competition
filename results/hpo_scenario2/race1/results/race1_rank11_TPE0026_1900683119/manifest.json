@@ -1,0 +1,41 @@
+{
+  "config_id": "race1_rank11_TPE0026_1900683119",
+  "instances": [
+    "0_BehnkeGeiger_42_workers.fjs",
+    "0_BehnkeGeiger_46_workers.fjs",
+    "0_BehnkeGeiger_60_workers.fjs",
+    "1_Brandimarte_14_workers.fjs",
+    "2a_Hurink_sdata_1_workers.fjs",
+    "2a_Hurink_sdata_18_workers.fjs",
+    "2a_Hurink_sdata_54_workers.fjs",
+    "2a_Hurink_sdata_61_workers.fjs",
+    "2a_Hurink_sdata_63_workers.fjs",
+    "2c_Hurink_rdata_28_workers.fjs",
+    "2c_Hurink_rdata_38_workers.fjs",
+    "2c_Hurink_rdata_50_workers.fjs",
+    "2d_Hurink_vdata_30_workers.fjs",
+    "3_DPpaulli_1_workers.fjs",
+    "3_DPpaulli_9_workers.fjs",
+    "4_ChambersBarnes_10_workers.fjs",
+    "5_Kacem_3_workers.fjs",
+    "5_Kacem_4_workers.fjs"
+  ],
+  "instances_dir": "instances/fjssp-w",
+  "phase": "race1",
+  "phase_spec": {
+    "final_simulations": 50,
+    "instance_count": 18,
+    "instance_pool": "train",
+    "max_function_evaluations": 1500000,
+    "n_configs": 15,
+    "run_count": 4,
+    "source_phase": "tpe",
+    "time_limit_s": 7200
+  },
+  "simulation_workers": 2,
+  "surrogate_n_jobs": 2,
+  "tasks_pending_at_start": 72,
+  "tasks_total": 72,
+  "uncertainty_json": "config/scenario2_uncertainty.json",
+  "workers": 10
+}

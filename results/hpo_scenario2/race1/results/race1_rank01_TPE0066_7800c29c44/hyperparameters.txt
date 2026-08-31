@@ -1,0 +1,59 @@
+Hyperparameters
+===============
+
+[notes]
+HPO trial config. RL mutation control is disabled.
+One Slurm array task evaluates one complete configuration for this phase.
+
+[run]
+config_id: race1_rank01_TPE0066_7800c29c44
+instances: ["0_BehnkeGeiger_42_workers.fjs","0_BehnkeGeiger_46_workers.fjs","0_BehnkeGeiger_60_workers.fjs","1_Brandimarte_14_workers.fjs","2a_Hurink_sdata_1_workers.fjs","2a_Hurink_sdata_18_workers.fjs","2a_Hurink_sdata_54_workers.fjs","2a_Hurink_sdata_61_workers.fjs","2a_Hurink_sdata_63_workers.fjs","2c_Hurink_rdata_28_workers.fjs","2c_Hurink_rdata_38_workers.fjs","2c_Hurink_rdata_50_workers.fjs","2d_Hurink_vdata_30_workers.fjs","3_DPpaulli_1_workers.fjs","3_DPpaulli_9_workers.fjs","4_ChambersBarnes_10_workers.fjs","5_Kacem_3_workers.fjs","5_Kacem_4_workers.fjs"]
+instances_dir: instances/fjssp-w
+phase: race1
+phase_spec: {"final_simulations":50,"instance_count":18,"instance_pool":"train","max_function_evaluations":1500000,"n_configs":15,"run_count":4,"source_phase":"tpe","time_limit_s":7200}
+simulation_workers: 2
+surrogate_n_jobs: 2
+tasks_pending_at_start: 72
+tasks_total: 72
+uncertainty_json: config/scenario2_uncertainty.json
+workers: 10
+
+[ga_config]
+elitism_rate: 0.05
+enable_rl_mutation_control: false
+local_search_interval: 20
+local_search_min_predicted_improvement: 2.0
+local_search_neighbors_per_origin: 128
+local_search_origin_count: 2
+local_search_random_k: 1
+local_search_real_eval_limit_per_origin: 16
+local_search_top_k: 4
+local_search_uncertain_k: 4
+offspring_amount: 2160
+population_size: 360
+restart_generations: 1200
+surrogate_max_features: sqrt
+surrogate_max_retrain_interval_real_candidates: 1000
+surrogate_max_training_samples: 5000
+surrogate_min_real_per_generation: 5
+surrogate_min_samples_leaf: 5
+surrogate_n_estimators: 200
+surrogate_n_jobs: -1
+surrogate_random_fraction: 0.005
+surrogate_retrain_interval_growth_factor: 2.0
+surrogate_retrain_interval_growth_samples: 5000
+surrogate_retrain_interval_real_candidates: 75
+surrogate_top_fraction: 0.015
+surrogate_uncertain_fraction: 0.005
+surrogate_warmup_real_candidates: 800
+use_surrogate_evaluation: true
+
+[run_config]
+do_restart: false
+final_simulations: 50
+internal_simulations: 8
+keep_multiple: false
+max_function_evaluations: 1500000
+max_generations: None
+progress_interval_evaluations: 100000
+time_limit_s: 7200

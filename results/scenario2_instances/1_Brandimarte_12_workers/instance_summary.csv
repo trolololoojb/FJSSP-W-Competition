@@ -1,0 +1,2 @@
+Instance;SuccessfulRuns;BestFitness;MeanFitness;StdFitness;BestRun;BestSeed;MeanRuntimeSeconds;MeanFunctionEvaluations
+1_Brandimarte_12_workers.fjs;10;1087.246608072505;1159.8036884966546;45.54612981136623;6;1005;109755.66877093315;1168060

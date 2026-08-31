@@ -1,0 +1,9 @@
+{
+  "best_fitness": 112.87578007039129,
+  "mean_fitness": 4003.2706340349077,
+  "mean_function_evaluations": 338953.82857142854,
+  "mean_runtime_s": 6381.762023081098,
+  "median_fitness": 2026.8303578916723,
+  "std_fitness": 5530.824164163059,
+  "successful_runs": 35
+}

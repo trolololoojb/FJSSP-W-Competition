@@ -1,0 +1,10 @@
+{
+  "final_simulations": 50,
+  "instance_count": 6,
+  "instance_pool": "holdout",
+  "max_function_evaluations": 5000000,
+  "n_configs": 5,
+  "run_count": 10,
+  "source_phase": "race2",
+  "time_limit_s": null
+}

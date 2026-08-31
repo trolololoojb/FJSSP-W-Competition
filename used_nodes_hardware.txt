@@ -1,0 +1,184 @@
+]633;E;read node;2029bc9c-00d7-40a5-a67f-9f9c8deb0dd1]633;C===== amo-n027 =====
+NodeName=amo-n027 Arch=x86_64 CoresPerSocket=20 
+   CPUAlloc=26 CPUEfctv=40 CPUTot=40 CPULoad=26.00
+   AvailableFeatures=OWNER:luis,CPU_MNF:intel,CPU_ARCH:avx512,IB:HDR100,YEAR:2020
+   Gres=(null)
+   RealMemory=180000 AllocMem=133120 FreeMem=142015 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=385000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== amo-n031 =====
+NodeName=amo-n031 Arch=x86_64 CoresPerSocket=20 
+   CPUAlloc=30 CPUEfctv=40 CPUTot=40 CPULoad=11.65
+   AvailableFeatures=OWNER:luis,CPU_MNF:intel,CPU_ARCH:avx512,IB:HDR100,YEAR:2020
+   Gres=(null)
+   RealMemory=180000 AllocMem=133120 FreeMem=162469 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=385000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== amo-n041 =====
+NodeName=amo-n041 Arch=x86_64 CoresPerSocket=20 
+   CPUAlloc=28 CPUEfctv=40 CPUTot=40 CPULoad=3.00
+   AvailableFeatures=OWNER:luis,CPU_MNF:intel,CPU_ARCH:avx512,IB:HDR100,YEAR:2020
+   Gres=(null)
+   RealMemory=180000 AllocMem=131096 FreeMem=99145 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=385000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== amo-n069 =====
+NodeName=amo-n069 Arch=x86_64 CoresPerSocket=20 
+   CPUAlloc=40 CPUEfctv=40 CPUTot=40 CPULoad=17.02
+   AvailableFeatures=OWNER:luis,CPU_MNF:intel,CPU_ARCH:avx512,IB:HDR100,YEAR:2020
+   Gres=(null)
+   RealMemory=180000 AllocMem=163840 FreeMem=158715 Sockets=2 Boards=1
+   State=ALLOCATED ThreadsPerCore=1 TmpDisk=385000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== amo-n071 =====
+NodeName=amo-n071 Arch=x86_64 CoresPerSocket=20 
+   CPUAlloc=38 CPUEfctv=40 CPUTot=40 CPULoad=5.00
+   AvailableFeatures=OWNER:luis,CPU_MNF:intel,CPU_ARCH:avx512,IB:HDR100,YEAR:2020
+   Gres=(null)
+   RealMemory=180000 AllocMem=172056 FreeMem=88800 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=385000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== amo-n080 =====
+NodeName=amo-n080 Arch=x86_64 CoresPerSocket=20 
+   CPUAlloc=39 CPUEfctv=40 CPUTot=40 CPULoad=20.21
+   AvailableFeatures=OWNER:luis,CPU_MNF:intel,CPU_ARCH:avx512,IB:HDR100,YEAR:2020
+   Gres=(null)
+   RealMemory=180000 AllocMem=153600 FreeMem=139954 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=385000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== mpp-25-n014 =====
+NodeName=mpp-25-n014 Arch=x86_64 CoresPerSocket=64 
+   CPUAlloc=128 CPUEfctv=128 CPUTot=128 CPULoad=104.36
+   AvailableFeatures=OWNER:luis,CPU_MNF:amd,CPU_ARCH:avx512,IB:NDR200,YEAR:2025
+   Gres=(null)
+   RealMemory=500000 AllocMem=310296 FreeMem=437744 Sockets=2 Boards=1
+   State=ALLOCATED ThreadsPerCore=1 TmpDisk=850000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== mpp-25-n016 =====
+NodeName=mpp-25-n016 Arch=x86_64 CoresPerSocket=64 
+   CPUAlloc=128 CPUEfctv=128 CPUTot=128 CPULoad=32.03
+   AvailableFeatures=OWNER:luis,CPU_MNF:amd,CPU_ARCH:avx512,IB:NDR200,YEAR:2025
+   Gres=(null)
+   RealMemory=500000 AllocMem=393280 FreeMem=489691 Sockets=2 Boards=1
+   State=ALLOCATED ThreadsPerCore=1 TmpDisk=850000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== mpp-25-n017 =====
+NodeName=mpp-25-n017 Arch=x86_64 CoresPerSocket=64 
+   CPUAlloc=126 CPUEfctv=128 CPUTot=128 CPULoad=37.27
+   AvailableFeatures=OWNER:luis,CPU_MNF:amd,CPU_ARCH:avx512,IB:NDR200,YEAR:2025
+   Gres=(null)
+   RealMemory=500000 AllocMem=470040 FreeMem=392565 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=850000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== mpp-25-n018 =====
+NodeName=mpp-25-n018 Arch=x86_64 CoresPerSocket=64 
+   CPUAlloc=126 CPUEfctv=128 CPUTot=128 CPULoad=55.85
+   AvailableFeatures=OWNER:luis,CPU_MNF:amd,CPU_ARCH:avx512,IB:NDR200,YEAR:2025
+   Gres=(null)
+   RealMemory=500000 AllocMem=352256 FreeMem=486015 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=850000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== mpp-25-n020 =====
+NodeName=mpp-25-n020 Arch=x86_64 CoresPerSocket=64 
+   CPUAlloc=128 CPUEfctv=128 CPUTot=128 CPULoad=124.75
+   AvailableFeatures=OWNER:luis,CPU_MNF:amd,CPU_ARCH:avx512,IB:NDR200,YEAR:2025
+   Gres=(null)
+   RealMemory=500000 AllocMem=405504 FreeMem=387819 Sockets=2 Boards=1
+   State=ALLOCATED ThreadsPerCore=1 TmpDisk=850000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== mpp-25-n021 =====
+NodeName=mpp-25-n021 Arch=x86_64 CoresPerSocket=64 
+   CPUAlloc=128 CPUEfctv=128 CPUTot=128 CPULoad=128.06
+   AvailableFeatures=OWNER:luis,CPU_MNF:amd,CPU_ARCH:avx512,IB:NDR200,YEAR:2025
+   Gres=(null)
+   RealMemory=500000 AllocMem=272384 FreeMem=424977 Sockets=2 Boards=1
+   State=ALLOCATED ThreadsPerCore=1 TmpDisk=850000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== mpp-25-n022 =====
+NodeName=mpp-25-n022 Arch=x86_64 CoresPerSocket=64 
+   CPUAlloc=98 CPUEfctv=128 CPUTot=128 CPULoad=64.21
+   AvailableFeatures=OWNER:luis,CPU_MNF:amd,CPU_ARCH:avx512,IB:NDR200,YEAR:2025
+   Gres=(null)
+   RealMemory=500000 AllocMem=335872 FreeMem=460900 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=850000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== mpp-25-n025 =====
+NodeName=mpp-25-n025 Arch=x86_64 CoresPerSocket=64 
+   CPUAlloc=128 CPUEfctv=128 CPUTot=128 CPULoad=120.44
+   AvailableFeatures=OWNER:luis,CPU_MNF:amd,CPU_ARCH:avx512,IB:NDR200,YEAR:2025
+   Gres=(null)
+   RealMemory=500000 AllocMem=393216 FreeMem=384302 Sockets=2 Boards=1
+   State=ALLOCATED ThreadsPerCore=1 TmpDisk=850000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== mpp-25-n026 =====
+NodeName=mpp-25-n026 Arch=x86_64 CoresPerSocket=64 
+   CPUAlloc=98 CPUEfctv=128 CPUTot=128 CPULoad=104.37
+   AvailableFeatures=OWNER:luis,CPU_MNF:amd,CPU_ARCH:avx512,IB:NDR200,YEAR:2025
+   Gres=(null)
+   RealMemory=500000 AllocMem=281624 FreeMem=444427 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=850000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== mpp-25-n027 =====
+NodeName=mpp-25-n027 Arch=x86_64 CoresPerSocket=64 
+   CPUAlloc=128 CPUEfctv=128 CPUTot=128 CPULoad=128.00
+   AvailableFeatures=OWNER:luis,CPU_MNF:amd,CPU_ARCH:avx512,IB:NDR200,YEAR:2025
+   Gres=(null)
+   RealMemory=500000 AllocMem=290816 FreeMem=431229 Sockets=2 Boards=1
+   State=ALLOCATED ThreadsPerCore=1 TmpDisk=850000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== mpp-25-n028 =====
+NodeName=mpp-25-n028 Arch=x86_64 CoresPerSocket=64 
+   CPUAlloc=128 CPUEfctv=128 CPUTot=128 CPULoad=40.29
+   AvailableFeatures=OWNER:luis,CPU_MNF:amd,CPU_ARCH:avx512,IB:NDR200,YEAR:2025
+   Gres=(null)
+   RealMemory=500000 AllocMem=447512 FreeMem=482093 Sockets=2 Boards=1
+   State=ALLOCATED ThreadsPerCore=1 TmpDisk=850000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== mpp-25-n036 =====
+NodeName=mpp-25-n036 Arch=x86_64 CoresPerSocket=64 
+   CPUAlloc=128 CPUEfctv=128 CPUTot=128 CPULoad=127.79
+   AvailableFeatures=OWNER:luis,CPU_MNF:amd,CPU_ARCH:avx512,IB:NDR200,YEAR:2025
+   Gres=(null)
+   RealMemory=500000 AllocMem=388928 FreeMem=439680 Sockets=2 Boards=1
+   State=ALLOCATED ThreadsPerCore=1 TmpDisk=850000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== taurus-n008 =====
+NodeName=taurus-n008 Arch=x86_64 CoresPerSocket=16 
+   CPUAlloc=24 CPUEfctv=32 CPUTot=32 CPULoad=9.47
+   AvailableFeatures=OWNER:luis,CPU_MNF:intel,CPU_ARCH:avx512,IB:FDR10,YEAR:2019
+   Gres=(null)
+   RealMemory=120000 AllocMem=94096 FreeMem=91833 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=512000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== taurus-n009 =====
+NodeName=taurus-n009 Arch=x86_64 CoresPerSocket=16 
+   CPUAlloc=14 CPUEfctv=32 CPUTot=32 CPULoad=14.78
+   AvailableFeatures=OWNER:luis,CPU_MNF:intel,CPU_ARCH:avx512,IB:FDR10,YEAR:2019
+   Gres=(null)
+   RealMemory=120000 AllocMem=36864 FreeMem=111407 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=512000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== taurus-n016 =====
+NodeName=taurus-n016 Arch=x86_64 CoresPerSocket=16 
+   CPUAlloc=26 CPUEfctv=32 CPUTot=32 CPULoad=16.25
+   AvailableFeatures=OWNER:luis,CPU_MNF:intel,CPU_ARCH:avx512,IB:FDR10,YEAR:2019
+   Gres=(null)
+   RealMemory=120000 AllocMem=96256 FreeMem=94848 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=512000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== taurus-n021 =====
+NodeName=taurus-n021 Arch=x86_64 CoresPerSocket=16 
+   CPUAlloc=29 CPUEfctv=32 CPUTot=32 CPULoad=21.83
+   AvailableFeatures=OWNER:luis,CPU_MNF:intel,CPU_ARCH:avx512,IB:FDR10,YEAR:2019
+   Gres=(null)
+   RealMemory=120000 AllocMem=98256 FreeMem=93390 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=512000 Weight=1 Owner=N/A MCS_label=N/A
+
+===== taurus-n024 =====
+NodeName=taurus-n024 Arch=x86_64 CoresPerSocket=16 
+   CPUAlloc=4 CPUEfctv=32 CPUTot=32 CPULoad=9.38
+   AvailableFeatures=OWNER:luis,CPU_MNF:intel,CPU_ARCH:avx512,IB:FDR10,YEAR:2019
+   Gres=(null)
+   RealMemory=120000 AllocMem=12288 FreeMem=104951 Sockets=2 Boards=1
+   State=MIXED ThreadsPerCore=1 TmpDisk=512000 Weight=1 Owner=N/A MCS_label=N/A
+

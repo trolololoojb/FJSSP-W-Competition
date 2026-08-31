@@ -1,0 +1,41 @@
+{
+  "final_simulations": 20,
+  "fixed_rl_params": {
+    "enable_rl_mutation_control": true,
+    "rl_clip_epsilon": 0.2,
+    "rl_entropy_coef": 0.01,
+    "rl_gamma": 0.99,
+    "rl_hidden_size": 32,
+    "rl_history_length": 3,
+    "rl_lambda": 0.95,
+    "rl_value_coef": 0.5,
+    "rl_warmup_generations": 10
+  },
+  "instances": [
+    "0_BehnkeGeiger_42_workers.fjs",
+    "0_BehnkeGeiger_46_workers.fjs",
+    "0_BehnkeGeiger_60_workers.fjs",
+    "1_Brandimarte_14_workers.fjs",
+    "2a_Hurink_sdata_1_workers.fjs",
+    "2a_Hurink_sdata_18_workers.fjs",
+    "2a_Hurink_sdata_54_workers.fjs",
+    "2a_Hurink_sdata_61_workers.fjs"
+  ],
+  "internal_simulations": 12,
+  "learning_rates": [
+    0.0001,
+    0.0003,
+    0.001
+  ],
+  "max_function_evaluations": 5000000,
+  "n_configs": 9,
+  "n_runs": 2,
+  "source_config_id": "final_rank03_race2_rank04_race1_rank08_TPE0071_8834ed6804",
+  "source_hpo_root": "/bigwork/nhwijoha/FJSSP-W-Competition/results/hpo_scenario2",
+  "time_limit_s": 7200,
+  "update_intervals": [
+    8,
+    16,
+    32
+  ]
+}

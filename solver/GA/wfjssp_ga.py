@@ -1,0 +1,2022 @@
+from __future__ import annotations
+
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple
+import math
+import random
+import time
+
+import numpy as np
+
+from util.evaluation import translate, makespan
+from solver.GA.parallel_simulation import run_n_simulations_parallel
+from solver.GA.rl_mutation_agent import RLMutationAgent, RLMutationAgentConfig
+from solver.GA.surrogate_features import featurize_candidate
+from solver.GA.surrogate_qrf import QRFSurrogate, SurrogateSample
+
+
+def is_simulatable_schedule(
+    start_times: Sequence[int],
+    end_times: Sequence[int],
+    machine_assignments: Sequence[int],
+    worker_assignments: Sequence[int],
+    job_sequence: Sequence[int],
+) -> bool:
+    """
+    Validate that a decoded schedule can be safely passed to stochastic simulation.
+
+    The check is intentionally conservative: candidates that violate temporal
+    consistency, resource constraints, or acyclicity are rejected early and can
+    be scored with +inf instead of crashing the GA.
+    """
+    n_operations = len(start_times)
+    if not (
+        len(end_times) == n_operations
+        and len(machine_assignments) == n_operations
+        and len(worker_assignments) == n_operations
+        and len(job_sequence) == n_operations
+    ):
+        return False
+
+    for i in range(n_operations):
+        if end_times[i] < start_times[i]:
+            return False
+
+    adjacency: Dict[int, Set[int]] = defaultdict(set)
+    indegree = [0] * n_operations
+
+    def add_edge(source: int, target: int) -> bool:
+        if source == target:
+            return False
+        if target not in adjacency[source]:
+            adjacency[source].add(target)
+            indegree[target] += 1
+        return True
+
+    job_operations: Dict[int, List[int]] = defaultdict(list)
+    for op_index, job_id in enumerate(job_sequence):
+        job_operations[job_id].append(op_index)
+
+    for operations in job_operations.values():
+        for predecessor, successor in zip(operations, operations[1:]):
+            if end_times[predecessor] > start_times[successor]:
+                return False
+            if not add_edge(predecessor, successor):
+                return False
+
+    def validate_resource(assignments: Sequence[int]) -> bool:
+        grouped_operations: Dict[int, List[int]] = defaultdict(list)
+        for op_index, resource_id in enumerate(assignments):
+            grouped_operations[resource_id].append(op_index)
+
+        for operations in grouped_operations.values():
+            operations.sort(key=lambda op_index: (start_times[op_index], end_times[op_index], op_index))
+            for predecessor, successor in zip(operations, operations[1:]):
+                if start_times[successor] < end_times[predecessor]:
+                    return False
+                if not add_edge(predecessor, successor):
+                    return False
+        return True
+
+    if not validate_resource(machine_assignments):
+        return False
+    if not validate_resource(worker_assignments):
+        return False
+
+    queue = deque(op_index for op_index, degree in enumerate(indegree) if degree == 0)
+    visited = 0
+    while queue:
+        current = queue.popleft()
+        visited += 1
+        for successor in adjacency[current]:
+            indegree[successor] -= 1
+            if indegree[successor] == 0:
+                queue.append(successor)
+
+    return visited == n_operations
+
+
+@dataclass
+class WorkerGAConfig:
+    """
+    Englisch:
+    Configuration for the worker assignment genetic algorithm. Expects durations and job sequence to be provided, along with various parameters controlling the genetic algorithm's behavior. 
+    Derived fields are computed in __post_init__ and include counts of jobs, machines, workers, operations, as well as precomputed lists of available machines and workers for each operation, 
+    and the maximum dissimilarity used for population initialization.
+    Deutsch: 
+    Konfiguration für den genetischen Algorithmus zur Arbeitszuweisung. Erwartet werden die Dauer und die Job-Sequenz, zusammen mit verschiedenen Parametern, die das Verhalten des genetischen Algorithmus steuern.
+    Abgeleitete Felder werden in __post_init__ berechnet und umfassen die Anzahl der Jobs, Maschinen, Arbeiter, Operationen sowie vorgefertigte Listen verfügbarer Maschinen und Arbeiter für jede Operation und die maximale Dissimilarität, die für die Initialisierung der Population verwendet wird.
+    """
+    durations: Sequence  # expected shape: [n_ops][n_machines][n_workers]
+    job_sequence: List[int]  # operation blocks by job, e.g. [0,0,0,1,1,2,...]
+    population_size: int = 100 # number of individuals in the population
+    offspring_amount: int = 400 # number of offspring created each generation, including the elite
+    mutation_probability: Optional[float] = None # if None, will be set to 1/(2*n_operations)
+    max_mutation_probability: float = 0.1 # maximum mutation probability before restart, if using adaptive mutation
+    elitism_rate: float = 0.1 # portion of the population to carry over directly to the next generation
+    max_elitism_rate: float = 0.1 # maximum elitism rate during restart, as a portion of the population size
+    tournament_size: int = 0  # 0 => max(1, pop/10), number of individuals competing in tournament selection
+    max_tournament_rate: float = 0.2 # maximum tournament size during restart, as a portion of the population size
+    population_size_growth_rate: float = 1.25 # growth rate for population and offspring amount during restart
+    restart_generations: int = 100 # number of generations with no improvement before performing a restart
+    duration_variety: float = 1.0 # variety of durations in the instance, used to adjust parameters during restart (1.0 means no adjustment, <1.0 reduces elitism and tournament size more for low variety)
+    use_dissimilarity: bool = True # whether to use dissimilarity in the fitness function and population initialization. dissimilarity is a measure of how different two individuals are, used to maintain diversity in the population. If True, new individuals will be initialized to be sufficiently dissimilar from the existing population, and the dissimilarity will also be considered during selection and mutation.
+    max_initialization_attempts: int = 100 # maximum attempts to find a sufficiently dissimilar individual during population initialization before relaxing the dissimilarity requirement
+    distance_adjustment_rate: float = 0.75 # rate at which to relax the dissimilarity requirement during population initialization if too many attempts fail
+    use_stochastic_evaluation: bool = False # whether to use stochastic evaluation with simulations to estimate robust makespan, instead of deterministic evaluation. If True, the fitness will include "makespan" as the estimated robust makespan, "robust_makespan_stdev" as the standard deviation of the makespan across simulations, and "R" as the robustness measure (e.g. the 95th percentile of the makespan distribution). The translate function will be used to get start times and assignments, and then run_n_simulations will be called to perform the stochastic evaluation.
+    uncertainty_parameters: Optional[List[List[float]]] = None # optional parameters for the uncertainty model used in stochastic evaluation, expected shape [n_ops][n_machines], where each entry is a parameter (e.g. standard deviation) for the processing time distribution of that operation on that machine. If None, no uncertainty will be applied and the deterministic durations will be used in the simulations.
+    n_simulations: int = 100 # number of simulations to run for stochastic evaluation when use_stochastic_evaluation is True
+    simulation_workers: int = 1 # parallel worker processes for stochastic simulation chunks
+    use_surrogate_evaluation: bool = False
+    surrogate_warmup_real_candidates: int = 300
+    surrogate_top_fraction: float = 0.02
+    surrogate_uncertain_fraction: float = 0.005
+    surrogate_random_fraction: float = 0.005
+    surrogate_min_real_per_generation: int = 5
+    surrogate_retrain_interval_real_candidates: int = 50
+    surrogate_n_estimators: int = 300
+    surrogate_min_samples_leaf: int = 3
+    surrogate_max_features: str = "sqrt"
+    surrogate_n_jobs: Optional[int] = -1
+    surrogate_max_training_samples: Optional[int] = 5_000
+    surrogate_retrain_interval_growth_samples: int = 5_000
+    surrogate_retrain_interval_growth_factor: float = 2.0
+    surrogate_max_retrain_interval_real_candidates: int = 1_000
+    surrogate_candidate_id_start: int = 0
+    local_search_interval: int = 0
+    local_search_origin_count: int = 0
+    local_search_neighbors_per_origin: int = 0
+    local_search_top_k: int = 0
+    local_search_uncertain_k: int = 0
+    local_search_random_k: int = 0
+    local_search_real_eval_limit_per_origin: int = 0
+    local_search_min_predicted_improvement: float = 0.0
+    seed: Optional[int] = None # random seed for reproducibility
+    enable_rl_mutation_control: bool = False
+    rl_update_interval: int = 16
+    rl_gamma: float = 0.99
+    rl_lambda: float = 0.95
+    rl_clip_epsilon: float = 0.2
+    rl_learning_rate: float = 1e-3
+    rl_hidden_size: int = 32
+    rl_entropy_coef: float = 0.01
+    rl_value_coef: float = 0.5
+    rl_reward_weights: Dict[str, float] = field(
+        default_factory=lambda: {
+            "global_best_improvement": 3.0,
+            "population_mean_improvement": 0.75,
+            "diversity_bonus": 0.1,
+            "infeasible_penalty": 0.75,
+            "stagnation_penalty": 0.05,
+        }
+    )
+    rl_history_length: int = 3
+    rl_warmup_generations: int = 0
+    rl_seed: Optional[int] = None
+
+    # derived fields
+    n_jobs: int = field(init=False)
+    n_machines: int = field(init=False)
+    n_workers: int = field(init=False)
+    n_operations: int = field(init=False)
+    job_start_indices: List[int] = field(init=False)
+    available_machines: List[List[int]] = field(init=False)
+    available_workers: List[List[List[int]]] = field(init=False)
+    max_dissimilarity: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        """
+        Englisch:
+        Compute derived fields based on the provided durations and job sequence. This includes counting the number of operations, machines, workers, and jobs, as well as precomputing the available machines and workers for each operation.
+        Deutsch:
+        Berechnung der abgeleiteten Felder basierend auf den bereitgestellten Dauern und der Job-Sequenz. Dies umfasst die Zählung der Anzahl der Operationen, Maschinen, Arbeiter und Jobs sowie die Vorberechnung der verfügbaren Maschinen und Arbeiter für jede Operation.
+        Args:            None
+        Returns:         None
+        Raises:          ValueError if job ids in the job sequence are not contiguous integers starting from 0
+        """
+        self.n_operations = len(self.job_sequence)
+        self.n_machines = len(self.durations[0])
+        self.n_workers = len(self.durations[0][0])
+        self.n_jobs = len(set(self.job_sequence))
+        if self.mutation_probability is None:
+            self.mutation_probability = 1.0 / (2.0 * self.n_operations)
+        self.job_start_indices = self._compute_job_start_indices(self.job_sequence)
+        self.available_machines = []
+        self.available_workers = []
+        for op in range(self.n_operations):
+            op_machines: List[int] = []
+            op_workers: List[List[int]] = [[] for _ in range(self.n_machines)]
+            for m in range(self.n_machines):
+                valid_workers = [w for w in range(self.n_workers) if self.durations[op][m][w] > 0]
+                op_workers[m] = valid_workers
+                if valid_workers:
+                    op_machines.append(m)
+            self.available_machines.append(op_machines)
+            self.available_workers.append(op_workers)
+        self.max_dissimilarity = self._determine_max_dissimilarity()
+
+    @staticmethod
+    def _compute_job_start_indices(job_sequence: List[int]) -> List[int]:
+        """
+        Englisch:
+        Computes the starting indices for each job in the operation sequence.
+        Deutsch:
+        Berechnet die Startindizes für jeden Job in der Operationssequenz.
+        Args:
+            job_sequence (List[int]): The sequence of job IDs for each operation.
+        Returns:
+            List[int]: List of starting indices for each job.
+        """
+        seen = {}
+        starts: List[int] = []
+        for idx, job in enumerate(job_sequence):
+            if job not in seen:
+                seen[job] = idx
+                starts.append(idx)
+        # assumes jobs are encoded as 0..n-1 like the benchmark code
+        if sorted(seen) != list(range(len(seen))):
+            raise ValueError("job ids must be contiguous 0..n-1 for this port")
+        return [seen[j] for j in range(len(seen))]
+
+    def _determine_max_dissimilarity(self) -> float:
+        """
+        Englisch:
+        Determines the maximum possible dissimilarity value for population initialization.
+        Deutsch:
+        Bestimmt den maximal möglichen Unähnlichkeitswert für die Populationsinitialisierung.
+        Args:
+            None
+        Returns:
+            float: The maximum dissimilarity value.
+        """
+        result = 0.0
+        for op in range(self.n_operations):
+            result += len(self.available_machines[op])
+            max_workers = 0
+            for m in self.available_machines[op]:
+                max_workers = max(max_workers, len(self.available_workers[op][m]))
+            result += max_workers
+        result += self.n_operations
+        return result
+
+
+class WFJSSPIndividual:
+    """
+    Englisch:
+    Represents an individual solution in the genetic algorithm, containing the operation sequence, machine assignments, worker assignments, fitness value, and feasibility flag.
+    Deutsch:
+    Repräsentiert eine individuelle Lösung im genetischen Algorithmus, enthält die Operationssequenz, Maschinenzuweisungen, Arbeiterzuweisungen, Fitnesswert und Machbarkeitsflag.
+    """
+    def __init__(self, config: WorkerGAConfig, rng: random.Random, randomize: bool = True) -> None:
+        """
+        Englisch:
+        Initializes a new individual with the given configuration and random number generator. If randomize is True, generates a random solution.
+        Deutsch:
+        Initialisiert ein neues Individuum mit der gegebenen Konfiguration und dem Zufallszahlengenerator. Wenn randomize True ist, generiert eine zufällige Lösung.
+        Args:
+            config (WorkerGAConfig): The configuration for the genetic algorithm.
+            rng (random.Random): Random number generator.
+            randomize (bool, optional): Whether to randomize the individual. Defaults to True.
+        Returns:
+            None
+        """
+        self.config = config
+        self.rng = rng
+        self.sequence = [0] * config.n_operations
+        self.assignments = [0] * config.n_operations
+        self.workers = [0] * config.n_operations
+        self.fitness = {"makespan": math.inf}
+        self.feasible = True
+        if randomize:
+            self.randomize()
+
+    def copy(self) -> "WFJSSPIndividual":
+        """
+        Englisch:
+        Creates a deep copy of the individual.
+        Deutsch:
+        Erstellt eine tiefe Kopie des Individuums.
+        Args:
+            None
+        Returns:
+            WFJSSPIndividual: A copy of the individual.
+        """
+        other = WFJSSPIndividual(self.config, self.rng, randomize=False)
+        other.sequence = self.sequence[:]
+        other.assignments = self.assignments[:]
+        other.workers = self.workers[:]
+        other.fitness = dict(self.fitness)
+        other.feasible = self.feasible
+        return other
+
+    def equals(self, other: "WFJSSPIndividual") -> bool:
+        """
+        Englisch:
+        Checks if this individual is equal to another based on sequence, assignments, and workers.
+        Deutsch:
+        Überprüft, ob dieses Individuum einem anderen basierend auf Sequenz, Zuweisungen und Arbeitern entspricht.
+        Args:
+            other (WFJSSPIndividual): The other individual to compare with.
+        Returns:
+            bool: True if equal, False otherwise.
+        """
+        return (
+            self.sequence == other.sequence
+            and self.assignments == other.assignments
+            and self.workers == other.workers
+        )
+
+    def randomize(self) -> None:
+        """
+        Englisch:
+        Randomly initializes the sequence, assignments, and workers for the individual.
+        Deutsch:
+        Initialisiert zufällig die Sequenz, Zuweisungen und Arbeiter für das Individuum.
+        Args:
+            None
+        Returns:
+            None
+        """
+        self.sequence = self.config.job_sequence[:]
+        self.rng.shuffle(self.sequence)
+        for i in range(self.config.n_operations):
+            self.assignments[i] = self.rng.choice(self.config.available_machines[i])
+        for i in range(self.config.n_operations):
+            self.workers[i] = self.rng.choice(self.config.available_workers[i][self.assignments[i]])
+
+    def dissimilarity(self, other: "WFJSSPIndividual") -> float:
+        """
+        Englisch:
+        Calculates the dissimilarity between this individual and another, used for population diversity.
+        Deutsch:
+        Berechnet die Unähnlichkeit zwischen diesem Individuum und einem anderen, verwendet für Populationsvielfalt.
+        Args:
+            other (WFJSSPIndividual): The other individual to compare with.
+        Returns:
+            float: The dissimilarity value.
+        """
+        result = 0.0
+        for i in range(self.config.n_operations):
+            if self.assignments[i] != other.assignments[i]:
+                result += len(self.config.available_machines[i])
+            if self.sequence[i] != other.sequence[i]:
+                result += 1.0
+            if self.workers[i] != other.workers[i]:
+                # keep the same slightly odd indexing logic as the C# version
+                result += len(self.config.available_workers[i][other.assignments[i]])
+        return result
+
+    @classmethod
+    def from_population(
+        cls,
+        config: WorkerGAConfig,
+        rng: random.Random,
+        population: List["WFJSSPIndividual"],
+    ) -> "WFJSSPIndividual":
+        """
+        Englisch:
+        Creates a new individual that is sufficiently dissimilar from the existing population.
+        Deutsch:
+        Erstellt ein neues Individuum, das ausreichend unähnlich zur bestehenden Population ist.
+        Args:
+            config (WorkerGAConfig): The configuration for the genetic algorithm.
+            rng (random.Random): Random number generator.
+            population (List[WFJSSPIndividual]): The current population.
+        Returns:
+            WFJSSPIndividual: A new individual.
+        """
+        ind = cls(config, rng, randomize=False)
+        if not population or not config.use_dissimilarity:
+            ind.randomize()
+            return ind
+        min_distance = config.max_dissimilarity
+        attempts = 0
+        while True:
+            if attempts > config.max_initialization_attempts:
+                min_distance *= config.distance_adjustment_rate
+                attempts = 0
+            ind.randomize()
+            ds = [ind.dissimilarity(p) for p in population]
+            avg = sum(ds) / len(ds) if ds else math.inf
+            if avg >= min_distance:
+                return ind
+            attempts += 1
+
+    @classmethod
+    def crossover(
+        cls,
+        config: WorkerGAConfig,
+        rng: random.Random,
+        parent_a: "WFJSSPIndividual",
+        parent_b: "WFJSSPIndividual",
+    ) -> "WFJSSPIndividual":
+        """
+        Englisch:
+        Performs crossover between two parent individuals to create a child.
+        Deutsch:
+        Führt Crossover zwischen zwei Eltern-Individuen durch, um ein Kind zu erstellen.
+        Args:
+            config (WorkerGAConfig): The configuration for the genetic algorithm.
+            rng (random.Random): Random number generator.
+            parent_a (WFJSSPIndividual): First parent.
+            parent_b (WFJSSPIndividual): Second parent.
+        Returns:
+            WFJSSPIndividual: The child individual.
+        """
+        child = cls(config, rng, randomize=False)
+        jobs = sorted(set(config.job_sequence))
+        a_jobs, b_jobs = set(), set()
+        for job in jobs:
+            if rng.random() < 0.5:
+                a_jobs.add(job)
+            else:
+                b_jobs.add(job)
+        parent_b_values = [job for job in parent_b.sequence if job in b_jobs]
+        b_index = 0
+        for i in range(config.n_operations):
+            if parent_a.sequence[i] in a_jobs:
+                child.sequence[i] = parent_a.sequence[i]
+            else:
+                child.sequence[i] = parent_b_values[b_index]
+                b_index += 1
+            if rng.random() < 0.5:
+                child.assignments[i] = parent_a.assignments[i]
+                child.workers[i] = parent_a.workers[i]
+            else:
+                child.assignments[i] = parent_b.assignments[i]
+                child.workers[i] = parent_b.workers[i]
+        return child
+
+    def mutate(self, p: float) -> None:
+        self.mutate_weighted(p, (1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0))
+
+    def mutate_sequence_once(self, index: int) -> bool:
+        """
+        Englisch:
+        Applies one sequence mutation around the given operation index.
+        Deutsch:
+        Führt eine Sequenzmutation um den gegebenen Operationsindex aus.
+        Args:
+            index (int): Operation index used as anchor point.
+        Returns:
+            bool: True if the mutation changed the individual.
+        """
+        if self.config.n_operations <= 1:
+            return False
+        attempts = 0
+        swap = index
+        while attempts < 100:
+            swap = self.rng.randrange(self.config.n_operations)
+            attempts += 1
+            if self.sequence[swap] != self.sequence[index]:
+                break
+        if swap == index or self.sequence[swap] == self.sequence[index]:
+            return False
+        self.sequence[index], self.sequence[swap] = self.sequence[swap], self.sequence[index]
+        return True
+
+    def mutate_machine_once(self, index: int) -> bool:
+        if len(self.config.available_machines[index]) <= 1:
+            return False
+        candidates = [machine for machine in self.config.available_machines[index] if machine != self.assignments[index]]
+        if not candidates:
+            return False
+        self.assignments[index] = self.rng.choice(candidates)
+        valid_workers = self.config.available_workers[index][self.assignments[index]]
+        if self.workers[index] not in valid_workers:
+            self.workers[index] = self.rng.choice(valid_workers)
+        return True
+
+    def mutate_worker_once(self, index: int) -> bool:
+        candidates = [
+            worker
+            for worker in self.config.available_workers[index][self.assignments[index]]
+            if worker != self.workers[index]
+        ]
+        if not candidates:
+            return False
+        self.workers[index] = self.rng.choice(candidates)
+        return True
+
+    def _valid_mutation_operator_indices(self, index: int) -> List[int]:
+        valid_indices: List[int] = []
+        if self.config.n_operations > 1 and any(job != self.sequence[index] for job in self.sequence):
+            valid_indices.append(0)
+        if len(self.config.available_machines[index]) > 1:
+            valid_indices.append(1)
+        current_machine = self.assignments[index]
+        if len(self.config.available_workers[index][current_machine]) > 1:
+            valid_indices.append(2)
+        return valid_indices
+
+    def mutate_weighted(self, p: float, mix: Sequence[float]) -> Dict[str, int]:
+        counts = {"sequence": 0, "machine": 0, "worker": 0, "events": 0, "no_op": 0}
+        if self.config.n_operations <= 0:
+            return counts
+
+        mix_array = np.asarray(mix, dtype=float).reshape(-1)
+        if mix_array.size != 3 or not np.all(np.isfinite(mix_array)):
+            mix_array = np.array([1.0 / 3.0] * 3, dtype=float)
+        mix_array = np.clip(mix_array, 0.0, None)
+        total = float(np.sum(mix_array))
+        if total <= 0.0:
+            mix_array = np.array([1.0 / 3.0] * 3, dtype=float)
+        else:
+            mix_array = mix_array / total
+
+        operators = (
+            ("sequence", self.mutate_sequence_once),
+            ("machine", self.mutate_machine_once),
+            ("worker", self.mutate_worker_once),
+        )
+
+        for index in range(self.config.n_operations):
+            if self.rng.random() >= p:
+                continue
+            counts["events"] += 1
+
+            valid_indices = self._valid_mutation_operator_indices(index)
+
+            applicable = []
+            applicable_weights = []
+            for op_idx in valid_indices:
+                name, op_fn = operators[op_idx]
+                applicable.append((name, op_fn))
+                applicable_weights.append(mix_array[op_idx])
+
+            if not applicable:
+                counts["no_op"] += 1
+                continue
+
+            weight_sum = float(sum(applicable_weights))
+            if weight_sum <= 0.0:
+                applicable_weights = [1.0 / len(applicable)] * len(applicable)
+            else:
+                applicable_weights = [weight / weight_sum for weight in applicable_weights]
+
+            draw = self.rng.random()
+            cumulative = 0.0
+            chosen_name = applicable[-1][0]
+            chosen_fn = applicable[-1][1]
+            for (name, op_fn), weight in zip(applicable, applicable_weights):
+                cumulative += weight
+                if draw <= cumulative:
+                    chosen_name = name
+                    chosen_fn = op_fn
+                    break
+
+            if chosen_fn(index):
+                counts[chosen_name] += 1
+            else:
+                counts["no_op"] += 1
+        return counts
+
+
+class WFJSSPGA:
+    """
+    Englisch:
+    Main genetic algorithm class for solving the Flexible Job Shop Scheduling Problem with Workers (FJSSP-W). Manages the population, evaluation, and evolution process.
+    Deutsch:
+    Hauptklasse des genetischen Algorithmus zur Lösung des Flexible Job Shop Scheduling Problems mit Workern (FJSSP-W). Verwaltet die Population, Evaluierung und Evolutionsprozess.
+    """
+    DEFAULT_TIME_LIMIT_S = 20 * 60
+    DEFAULT_MAX_FUNCTION_EVALUATIONS = 5_000_000
+    DEFAULT_PROGRESS_INTERVAL_EVALUATIONS = 50_000
+
+    def __init__(self, config: WorkerGAConfig) -> None:
+        """
+        Englisch:
+        Initializes the genetic algorithm with the given configuration.
+        Deutsch:
+        Initialisiert den genetischen Algorithmus mit der gegebenen Konfiguration.
+        Args:
+            config (WorkerGAConfig): The configuration for the genetic algorithm.
+        Returns:
+            None
+        """
+        self.config = config
+        self.rng = random.Random(config.seed)
+        self.population: List[WFJSSPIndividual] = []
+        self.function_evaluations = 0
+        self.best_found_function_evaluations: Optional[int] = None
+        self._max_function_evaluations: Optional[int] = None
+        self.last_mutation_operator_counts = {
+            "sequence": 0,
+            "machine": 0,
+            "worker": 0,
+            "events": 0,
+            "no_op": 0,
+        }
+        self._run_start_time: Optional[float] = None
+        self._next_progress_evaluation: Optional[int] = None
+        self._progress_interval_evaluations: Optional[int] = None
+        self.surrogate = None
+        if self.config.use_surrogate_evaluation and self.config.use_stochastic_evaluation:
+            self.surrogate = QRFSurrogate(
+                min_samples_before_fit=self.config.surrogate_warmup_real_candidates,
+                n_estimators=self.config.surrogate_n_estimators,
+                min_samples_leaf=self.config.surrogate_min_samples_leaf,
+                max_features=self.config.surrogate_max_features,
+                n_jobs=self.config.surrogate_n_jobs,
+                max_training_samples=self.config.surrogate_max_training_samples,
+                random_state=self.config.seed,
+            )
+        self._next_candidate_id = int(self.config.surrogate_candidate_id_start)
+        self.surrogate_predictions = 0
+        self.surrogate_real_candidate_evaluations = 0
+        self.surrogate_since_last_fit = 0
+        self.surrogate_fit_count = 0
+        self.surrogate_validation_count = 0
+        self.surrogate_abs_error_R_sum = 0.0
+        self.surrogate_squared_error_R_sum = 0.0
+        self.surrogate_interval_coverage_count = 0
+        self.surrogate_conservative_score_count = 0
+        self.last_surrogate_metrics = self._empty_surrogate_metrics()
+        self.last_local_search_metrics = self._empty_local_search_metrics()
+
+    def _new_candidate_id(self) -> int:
+        candidate_id = self._next_candidate_id
+        self._next_candidate_id += 1
+        return candidate_id
+
+    @staticmethod
+    def _empty_surrogate_metrics() -> dict:
+        return {
+            "surrogate_batch_predictions": 0,
+            "surrogate_batch_real_evaluations": 0,
+            "surrogate_batch_surrogate_evaluations": 0,
+            "surrogate_batch_real_fraction": 0.0,
+            "surrogate_batch_mean_uncertainty_R": 0.0,
+            "surrogate_batch_mae_R": None,
+            "surrogate_batch_rmse_R": None,
+            "surrogate_batch_mae_robust_makespan": None,
+            "surrogate_batch_score_bias": None,
+            "surrogate_batch_interval_coverage": None,
+            "surrogate_batch_conservative_score_rate": None,
+            "surrogate_batch_spearman_score": None,
+        }
+
+    @staticmethod
+    def _empty_local_search_metrics() -> dict:
+        return {
+            "local_search_runs": 0,
+            "local_search_origins": 0,
+            "local_search_neighbors": 0,
+            "local_search_predictions": 0,
+            "local_search_real_evaluations": 0,
+            "local_search_replacements": 0,
+            "local_search_best_improvement": 0.0,
+            "local_search_worker_neighbors": 0,
+            "local_search_machine_worker_neighbors": 0,
+            "local_search_sequence_swap_neighbors": 0,
+            "local_search_sequence_shift_neighbors": 0,
+        }
+
+    @staticmethod
+    def _spearman_correlation(xs: Sequence[float], ys: Sequence[float]) -> Optional[float]:
+        if len(xs) < 2 or len(ys) < 2:
+            return None
+        x = np.asarray(xs, dtype=float)
+        y = np.asarray(ys, dtype=float)
+        if not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
+            return None
+        x_ranks = np.argsort(np.argsort(x)).astype(float)
+        y_ranks = np.argsort(np.argsort(y)).astype(float)
+        if float(np.std(x_ranks)) == 0.0 or float(np.std(y_ranks)) == 0.0:
+            return None
+        return float(np.corrcoef(x_ranks, y_ranks)[0, 1])
+
+    def _record_surrogate_batch_metrics(
+        self,
+        predictions: Sequence,
+        selected_ids: Set[int],
+        validation_pairs: Sequence[Tuple],
+    ) -> None:
+        metrics = self._empty_surrogate_metrics()
+        metrics["surrogate_batch_predictions"] = len(predictions)
+        metrics["surrogate_batch_real_evaluations"] = len(selected_ids)
+        metrics["surrogate_batch_surrogate_evaluations"] = max(0, len(predictions) - len(selected_ids))
+        if predictions:
+            metrics["surrogate_batch_real_fraction"] = len(selected_ids) / len(predictions)
+            metrics["surrogate_batch_mean_uncertainty_R"] = float(
+                np.mean([float(prediction.uncertainty_R) for prediction in predictions])
+            )
+
+        if validation_pairs:
+            abs_errors_R = []
+            squared_errors_R = []
+            abs_errors_makespan = []
+            score_biases = []
+            covered = 0
+            conservative = 0
+            predicted_scores = []
+            actual_makespans = []
+
+            for prediction, actual_R, actual_makespan in validation_pairs:
+                abs_error_R = abs(float(prediction.q50_R) - float(actual_R))
+                abs_errors_R.append(abs_error_R)
+                squared_errors_R.append(abs_error_R ** 2)
+                abs_errors_makespan.append(
+                    abs(float(prediction.predicted_robust_makespan) - float(actual_makespan))
+                )
+                score_bias = float(prediction.score) - float(actual_makespan)
+                score_biases.append(score_bias)
+                if float(prediction.q10_R) <= float(actual_R) <= float(prediction.q90_R):
+                    covered += 1
+                if score_bias >= 0.0:
+                    conservative += 1
+                predicted_scores.append(float(prediction.score))
+                actual_makespans.append(float(actual_makespan))
+
+            n_validations = len(validation_pairs)
+            metrics["surrogate_batch_mae_R"] = float(np.mean(abs_errors_R))
+            metrics["surrogate_batch_rmse_R"] = float(math.sqrt(np.mean(squared_errors_R)))
+            metrics["surrogate_batch_mae_robust_makespan"] = float(np.mean(abs_errors_makespan))
+            metrics["surrogate_batch_score_bias"] = float(np.mean(score_biases))
+            metrics["surrogate_batch_interval_coverage"] = covered / n_validations
+            metrics["surrogate_batch_conservative_score_rate"] = conservative / n_validations
+            metrics["surrogate_batch_spearman_score"] = self._spearman_correlation(
+                predicted_scores,
+                actual_makespans,
+            )
+
+            self.surrogate_validation_count += n_validations
+            self.surrogate_abs_error_R_sum += float(np.sum(abs_errors_R))
+            self.surrogate_squared_error_R_sum += float(np.sum(squared_errors_R))
+            self.surrogate_interval_coverage_count += covered
+            self.surrogate_conservative_score_count += conservative
+
+        self.last_surrogate_metrics = metrics
+
+    def _cumulative_surrogate_metrics(self) -> dict:
+        if self.surrogate_validation_count <= 0:
+            return {
+                "surrogate_validation_count": 0,
+                "surrogate_cumulative_mae_R": None,
+                "surrogate_cumulative_rmse_R": None,
+                "surrogate_cumulative_interval_coverage": None,
+                "surrogate_cumulative_conservative_score_rate": None,
+            }
+
+        count = self.surrogate_validation_count
+        return {
+            "surrogate_validation_count": int(count),
+            "surrogate_cumulative_mae_R": float(self.surrogate_abs_error_R_sum / count),
+            "surrogate_cumulative_rmse_R": float(math.sqrt(self.surrogate_squared_error_R_sum / count)),
+            "surrogate_cumulative_interval_coverage": float(self.surrogate_interval_coverage_count / count),
+            "surrogate_cumulative_conservative_score_rate": float(
+                self.surrogate_conservative_score_count / count
+            ),
+        }
+
+    def _maybe_print_progress(self) -> None:
+        if (
+            self._run_start_time is None
+            or self._next_progress_evaluation is None
+            or self._progress_interval_evaluations is None
+        ):
+            return
+
+        while self.function_evaluations >= self._next_progress_evaluation:
+            runtime_s = time.time() - self._run_start_time
+            print(
+                f"Progress: {self.function_evaluations:,} Funktionsevaluierungen, "
+                f"Laufzeit {runtime_s:.2f}s",
+                flush=True,
+            )
+            self._next_progress_evaluation += self._progress_interval_evaluations
+
+    def _count_function_evaluation(self, amount: int = 1) -> None:
+        self.function_evaluations += amount
+        self._maybe_print_progress()
+
+    def _has_function_evaluation_budget(self, amount: int = 1) -> bool:
+        if self._max_function_evaluations is None:
+            return True
+        return self.function_evaluations + amount <= self._max_function_evaluations
+
+    def _decode_individual(self, ind: WFJSSPIndividual):
+        if not ind.feasible:
+            return None
+
+        try:
+            start_times, machine_assignments, worker_assignments = translate(
+                ind.sequence, ind.assignments, ind.workers, self.config.durations
+            )
+        except Exception:
+            return None
+
+        end_times = [
+            start_times[i] + self.config.durations[i][machine_assignments[i]][worker_assignments[i]]
+            for i in range(len(start_times))
+        ]
+        if not is_simulatable_schedule(
+            start_times,
+            end_times,
+            machine_assignments,
+            worker_assignments,
+            self.config.job_sequence,
+        ):
+            return None
+
+        deterministic_makespan = makespan(
+            start_times,
+            machine_assignments,
+            worker_assignments,
+            self.config.durations,
+        )
+        features = featurize_candidate(
+            sequence=ind.sequence,
+            machine_assignments=machine_assignments,
+            worker_assignments=worker_assignments,
+            start_times=start_times,
+            durations=self.config.durations,
+            job_sequence=self.config.job_sequence,
+            uncertainty_parameters=self.config.uncertainty_parameters,
+        )
+        return {
+            "start_times": start_times,
+            "end_times": end_times,
+            "machine_assignments": machine_assignments,
+            "worker_assignments": worker_assignments,
+            "deterministic_makespan": deterministic_makespan,
+            "features": features,
+        }
+
+    def evaluate_real(self, ind: WFJSSPIndividual, candidate_id: int | None = None) -> float:
+        """
+        Englisch:
+        Evaluates the fitness of an individual by simulating the scheduling and calculating the makespan.
+        Deutsch:
+        Bewertet die Fitness eines Individuums, indem das Scheduling simuliert und der Makespan berechnet wird.
+        Args:
+            ind (WFJSSPIndividual): The individual to evaluate.
+        Returns:
+            float: The makespan value.
+        """
+        decoded = self._decode_individual(ind)
+        if decoded is None:
+            ind.fitness["makespan"] = math.inf
+            ind.fitness["fitness_source"] = "invalid"
+            ind.fitness["candidate_id"] = candidate_id
+            return math.inf
+
+        if self.config.use_stochastic_evaluation:
+            expected_evaluations = max(1, int(self.config.n_simulations))
+            if not self._has_function_evaluation_budget(expected_evaluations):
+                ind.fitness["makespan"] = math.inf
+                ind.fitness["fitness_source"] = "budget_exhausted"
+                ind.fitness["candidate_id"] = candidate_id
+                return math.inf
+            try:
+                simulation_seed = self.rng.randrange(0, 2**32)
+                results, robust_makespan, robust_makespan_stdev, R = run_n_simulations_parallel(
+                    decoded["start_times"],
+                    decoded["end_times"],
+                    decoded["machine_assignments"],
+                    decoded["worker_assignments"],
+                    self.config.job_sequence,
+                    self.config.durations,
+                    self.config.uncertainty_parameters,
+                    self.config.n_simulations,
+                    processing_times=True,
+                    workers=self.config.simulation_workers,
+                    seed=simulation_seed,
+                )
+            except (RecursionError, Exception):
+                ind.fitness["makespan"] = math.inf
+                ind.fitness["fitness_source"] = "invalid"
+                ind.fitness["candidate_id"] = candidate_id
+                return math.inf
+            ind.fitness["makespan"] = robust_makespan
+            ind.fitness["robust_makespan_stdev"] = robust_makespan_stdev
+            ind.fitness["R"] = R
+            ind.fitness["fitness_source"] = "real"
+            ind.fitness["candidate_id"] = candidate_id
+            self._count_function_evaluation(len(results))
+            ind.fitness["evaluated_at_function_evaluations"] = int(self.function_evaluations)
+            if self.surrogate is not None:
+                self.surrogate.add_sample(
+                    SurrogateSample(
+                        candidate_id=-1 if candidate_id is None else int(candidate_id),
+                        features=decoded["features"],
+                        deterministic_makespan=decoded["deterministic_makespan"],
+                        robust_makespan=float(robust_makespan),
+                        robust_makespan_stdev=float(robust_makespan_stdev),
+                        R=float(R),
+                        n_simulations=len(results),
+                        source="real",
+                    )
+                )
+                self.surrogate_real_candidate_evaluations += 1
+                self.surrogate_since_last_fit += 1
+            return robust_makespan
+        else:
+            if not self._has_function_evaluation_budget(1):
+                ind.fitness["makespan"] = math.inf
+                ind.fitness["fitness_source"] = "budget_exhausted"
+                ind.fitness["candidate_id"] = candidate_id
+                return math.inf
+            makespan_val = decoded["deterministic_makespan"]
+            ind.fitness["makespan"] = makespan_val
+            ind.fitness["fitness_source"] = "real"
+            ind.fitness["candidate_id"] = candidate_id
+            self._count_function_evaluation()
+            ind.fitness["evaluated_at_function_evaluations"] = int(self.function_evaluations)
+            return makespan_val
+
+    def evaluate(self, ind: WFJSSPIndividual) -> float:
+        return self.evaluate_real(ind, candidate_id=self._new_candidate_id())
+
+    def _current_surrogate_retrain_interval(self) -> int:
+        base_interval = max(1, int(self.config.surrogate_retrain_interval_real_candidates))
+        max_interval = max(
+            base_interval,
+            int(self.config.surrogate_max_retrain_interval_real_candidates),
+        )
+        growth_samples = int(self.config.surrogate_retrain_interval_growth_samples)
+        growth_factor = float(self.config.surrogate_retrain_interval_growth_factor)
+        if self.surrogate is None or growth_samples <= 0 or growth_factor <= 1.0:
+            return base_interval
+
+        sample_count = len(self.surrogate.samples)
+        mature_samples = max(0, sample_count - int(self.config.surrogate_warmup_real_candidates))
+        growth_steps = mature_samples // growth_samples
+        interval = int(round(base_interval * (growth_factor ** growth_steps)))
+        return max(base_interval, min(max_interval, interval))
+
+    def evaluate_batch(self, individuals: List[WFJSSPIndividual]) -> None:
+        if not individuals:
+            return
+
+        surrogate_active = (
+            self.config.use_surrogate_evaluation
+            and self.config.use_stochastic_evaluation
+            and self.surrogate is not None
+        )
+        if not surrogate_active:
+            self.last_surrogate_metrics = self._empty_surrogate_metrics()
+            for ind in individuals:
+                self.evaluate_real(ind, candidate_id=self._new_candidate_id())
+            return
+
+        if not self.surrogate.is_ready():
+            self.last_surrogate_metrics = self._empty_surrogate_metrics()
+            for ind in individuals:
+                self.evaluate_real(ind, candidate_id=self._new_candidate_id())
+            if self.surrogate.is_ready() and self.surrogate.fit():
+                self.surrogate_fit_count += 1
+                self.surrogate_since_last_fit = 0
+            return
+
+        if self.surrogate.model is None:
+            if not self.surrogate.fit():
+                self.last_surrogate_metrics = self._empty_surrogate_metrics()
+                for ind in individuals:
+                    self.evaluate_real(ind, candidate_id=self._new_candidate_id())
+                return
+            self.surrogate_fit_count += 1
+            self.surrogate_since_last_fit = 0
+
+        candidate_records = []
+        for ind in individuals:
+            candidate_id = self._new_candidate_id()
+            decoded = self._decode_individual(ind)
+            if decoded is None:
+                ind.fitness["makespan"] = math.inf
+                ind.fitness["fitness_source"] = "invalid"
+                ind.fitness["candidate_id"] = candidate_id
+                continue
+            candidate_records.append(
+                {
+                    "candidate_id": candidate_id,
+                    "individual": ind,
+                    "features": decoded["features"],
+                    "deterministic_makespan": decoded["deterministic_makespan"],
+                }
+            )
+
+        if not candidate_records:
+            self.last_surrogate_metrics = self._empty_surrogate_metrics()
+            return
+
+        predictions = self.surrogate.predict_many(candidate_records)
+        selection_seed = self.rng.randrange(0, 2**32)
+        selected_ids = self.surrogate.select_for_real_evaluation(
+            predictions,
+            top_fraction=self.config.surrogate_top_fraction,
+            uncertain_fraction=self.config.surrogate_uncertain_fraction,
+            random_fraction=self.config.surrogate_random_fraction,
+            min_count=self.config.surrogate_min_real_per_generation,
+            rng=selection_seed,
+        )
+        records_by_id = {record["candidate_id"]: record for record in candidate_records}
+        validation_pairs = []
+
+        for prediction in predictions:
+            record = records_by_id[prediction.candidate_id]
+            ind = record["individual"]
+            if prediction.candidate_id in selected_ids:
+                self.evaluate_real(ind, candidate_id=prediction.candidate_id)
+                actual_R = ind.fitness.get("R")
+                actual_makespan = ind.fitness.get("makespan")
+                if (
+                    actual_R is not None
+                    and actual_makespan is not None
+                    and np.isfinite(float(actual_R))
+                    and np.isfinite(float(actual_makespan))
+                ):
+                    validation_pairs.append((prediction, float(actual_R), float(actual_makespan)))
+                continue
+
+            ind.fitness["makespan"] = prediction.score
+            ind.fitness["fitness_source"] = "surrogate"
+            ind.fitness["candidate_id"] = prediction.candidate_id
+            ind.fitness["surrogate_mean_R"] = prediction.mean_R
+            ind.fitness["surrogate_q10_R"] = prediction.q10_R
+            ind.fitness["surrogate_q50_R"] = prediction.q50_R
+            ind.fitness["surrogate_q90_R"] = prediction.q90_R
+            ind.fitness["surrogate_uncertainty_R"] = prediction.uncertainty_R
+            ind.fitness["surrogate_predicted_robust_makespan"] = prediction.predicted_robust_makespan
+            self.surrogate_predictions += 1
+
+        self._record_surrogate_batch_metrics(predictions, selected_ids, validation_pairs)
+
+        if self.surrogate_since_last_fit >= self._current_surrogate_retrain_interval():
+            if self.surrogate.fit():
+                self.surrogate_fit_count += 1
+                self.surrogate_since_last_fit = 0
+
+    def _local_search_enabled(self) -> bool:
+        return (
+            int(self.config.local_search_interval) > 0
+            and int(self.config.local_search_origin_count) > 0
+            and int(self.config.local_search_neighbors_per_origin) > 0
+            and self.config.use_surrogate_evaluation
+            and self.config.use_stochastic_evaluation
+            and self.surrogate is not None
+            and self.surrogate.is_ready()
+            and self.surrogate.model is not None
+        )
+
+    @staticmethod
+    def individual_key(ind: WFJSSPIndividual) -> Tuple[Tuple[int, ...], Tuple[int, ...], Tuple[int, ...]]:
+        return (
+            tuple(ind.sequence),
+            tuple(ind.assignments),
+            tuple(ind.workers),
+        )
+
+    def _local_search_operation_indices(self, decoded: dict, limit: int = 20) -> List[int]:
+        end_times = decoded.get("end_times", [])
+        operation_indices = list(range(min(len(end_times), self.config.n_operations)))
+        operation_indices.sort(key=lambda op_index: (end_times[op_index], op_index), reverse=True)
+        return operation_indices[: max(0, min(limit, len(operation_indices)))]
+
+    def _append_local_neighbor(
+        self,
+        neighbors: List[Tuple[str, WFJSSPIndividual]],
+        seen: Set[Tuple[Tuple[int, ...], Tuple[int, ...], Tuple[int, ...]]],
+        origin: WFJSSPIndividual,
+        neighbor: WFJSSPIndividual,
+        kind: str,
+        limit: int,
+    ) -> bool:
+        if len(neighbors) >= limit:
+            return False
+        key = self.individual_key(neighbor)
+        if key in seen:
+            return True
+        seen.add(key)
+        if key == self.individual_key(origin):
+            return True
+        neighbor.fitness = {"makespan": math.inf}
+        neighbors.append((kind, neighbor))
+        return len(neighbors) < limit
+
+    def _generate_local_neighbors(
+        self,
+        origin: WFJSSPIndividual,
+        decoded: dict,
+        limit: int,
+    ) -> List[Tuple[str, WFJSSPIndividual]]:
+        if limit <= 0:
+            return []
+
+        neighbors: List[Tuple[str, WFJSSPIndividual]] = []
+        seen: Set[Tuple[Tuple[int, ...], Tuple[int, ...], Tuple[int, ...]]] = {self.individual_key(origin)}
+        operation_indices = self._local_search_operation_indices(decoded)
+
+        for op_index in operation_indices:
+            current_machine = origin.assignments[op_index]
+            for worker in self.config.available_workers[op_index][current_machine]:
+                if worker == origin.workers[op_index]:
+                    continue
+                neighbor = origin.copy()
+                neighbor.workers[op_index] = worker
+                if not self._append_local_neighbor(neighbors, seen, origin, neighbor, "worker", limit):
+                    return neighbors
+
+        for op_index in operation_indices:
+            for machine in self.config.available_machines[op_index]:
+                if machine == origin.assignments[op_index]:
+                    continue
+                for worker in self.config.available_workers[op_index][machine]:
+                    neighbor = origin.copy()
+                    neighbor.assignments[op_index] = machine
+                    neighbor.workers[op_index] = worker
+                    if not self._append_local_neighbor(neighbors, seen, origin, neighbor, "machine_worker", limit):
+                        return neighbors
+
+        sequence_positions_by_job: Dict[int, List[int]] = defaultdict(list)
+        for position, job in enumerate(origin.sequence):
+            sequence_positions_by_job[job].append(position)
+
+        important_positions: List[int] = []
+        seen_positions: Set[int] = set()
+        for op_index in operation_indices:
+            job = self.config.job_sequence[op_index]
+            job_start = self.config.job_start_indices[job]
+            occurrence_index = op_index - job_start
+            positions = sequence_positions_by_job.get(job, [])
+            if 0 <= occurrence_index < len(positions):
+                position = positions[occurrence_index]
+                if position not in seen_positions:
+                    important_positions.append(position)
+                    seen_positions.add(position)
+
+        sequence_window = 5
+        for position in important_positions:
+            start = max(0, position - sequence_window)
+            stop = min(self.config.n_operations, position + sequence_window + 1)
+            for swap_position in range(start, stop):
+                if swap_position == position:
+                    continue
+                if origin.sequence[swap_position] == origin.sequence[position]:
+                    continue
+                neighbor = origin.copy()
+                neighbor.sequence[position], neighbor.sequence[swap_position] = (
+                    neighbor.sequence[swap_position],
+                    neighbor.sequence[position],
+                )
+                if not self._append_local_neighbor(neighbors, seen, origin, neighbor, "sequence_swap", limit):
+                    return neighbors
+
+        shift_offsets = (-5, -3, -1, 1, 3, 5)
+        for position in important_positions:
+            for offset in shift_offsets:
+                target = position + offset
+                if target < 0 or target >= self.config.n_operations or target == position:
+                    continue
+                neighbor = origin.copy()
+                value = neighbor.sequence.pop(position)
+                neighbor.sequence.insert(target, value)
+                if not self._append_local_neighbor(neighbors, seen, origin, neighbor, "sequence_shift", limit):
+                    return neighbors
+
+        return neighbors
+
+    def _select_local_search_candidate_ids(
+        self,
+        predictions: Sequence,
+        records_by_id: Dict[int, dict],
+    ) -> Set[int]:
+        selected_ids: Set[int] = set()
+        selected_priority: Dict[int, int] = {}
+
+        for prediction in predictions:
+            origin = records_by_id[prediction.candidate_id]["origin"]
+            origin_makespan = float(origin.fitness.get("makespan", math.inf))
+            predicted_improvement = origin_makespan - float(prediction.predicted_robust_makespan)
+            min_improvement = max(0.0, float(self.config.local_search_min_predicted_improvement))
+            if predicted_improvement > 0.0 and predicted_improvement >= min_improvement:
+                selected_ids.add(prediction.candidate_id)
+                selected_priority[prediction.candidate_id] = min(
+                    selected_priority.get(prediction.candidate_id, 99),
+                    0,
+                )
+
+        top_k = max(0, int(self.config.local_search_top_k))
+        if top_k > 0:
+            for prediction in sorted(
+                predictions,
+                key=lambda item: item.predicted_robust_makespan,
+            )[:top_k]:
+                selected_ids.add(prediction.candidate_id)
+                selected_priority[prediction.candidate_id] = min(
+                    selected_priority.get(prediction.candidate_id, 99),
+                    1,
+                )
+
+        uncertain_k = max(0, int(self.config.local_search_uncertain_k))
+        if uncertain_k > 0:
+            for prediction in sorted(
+                predictions,
+                key=lambda item: item.uncertainty_R,
+                reverse=True,
+            )[:uncertain_k]:
+                selected_ids.add(prediction.candidate_id)
+                selected_priority[prediction.candidate_id] = min(
+                    selected_priority.get(prediction.candidate_id, 99),
+                    2,
+                )
+
+        random_k = max(0, int(self.config.local_search_random_k))
+        remaining = [prediction.candidate_id for prediction in predictions if prediction.candidate_id not in selected_ids]
+        if random_k > 0 and remaining:
+            for candidate_id in self.rng.sample(remaining, k=min(random_k, len(remaining))):
+                selected_ids.add(candidate_id)
+                selected_priority[candidate_id] = min(selected_priority.get(candidate_id, 99), 3)
+
+        per_origin_limit = max(0, int(self.config.local_search_real_eval_limit_per_origin))
+        if per_origin_limit > 0:
+            predictions_by_id = {prediction.candidate_id: prediction for prediction in predictions}
+            grouped_ids: Dict[int, List[int]] = defaultdict(list)
+            for candidate_id in selected_ids:
+                origin = records_by_id[candidate_id]["origin"]
+                grouped_ids[id(origin)].append(candidate_id)
+
+            capped_ids: Set[int] = set()
+            for candidate_ids in grouped_ids.values():
+                candidate_ids.sort(
+                    key=lambda candidate_id: (
+                        selected_priority.get(candidate_id, 99),
+                        float(predictions_by_id[candidate_id].predicted_robust_makespan),
+                        -float(predictions_by_id[candidate_id].uncertainty_R),
+                    )
+                )
+                capped_ids.update(candidate_ids[:per_origin_limit])
+            selected_ids = capped_ids
+
+        return selected_ids
+
+    def run_local_search(self, stop_condition=None) -> None:
+        self.last_local_search_metrics = self._empty_local_search_metrics()
+        if not self._local_search_enabled():
+            return
+
+        origins = [
+            ind
+            for ind in self.population
+            if self._is_real_evaluated(ind) and np.isfinite(float(ind.fitness.get("makespan", math.inf)))
+        ]
+        origins.sort(key=lambda x: x.fitness["makespan"])
+        origins = origins[: max(0, int(self.config.local_search_origin_count))]
+        if not origins:
+            return
+
+        candidate_records = []
+        neighbor_kind_counts = {
+            "worker": 0,
+            "machine_worker": 0,
+            "sequence_swap": 0,
+            "sequence_shift": 0,
+        }
+        neighbors_per_origin = max(0, int(self.config.local_search_neighbors_per_origin))
+        for origin in origins:
+            if stop_condition is not None and stop_condition():
+                break
+            origin_decoded = self._decode_individual(origin)
+            if origin_decoded is None:
+                continue
+            for neighbor_kind, neighbor in self._generate_local_neighbors(origin, origin_decoded, neighbors_per_origin):
+                if stop_condition is not None and stop_condition():
+                    break
+                candidate_id = self._new_candidate_id()
+                decoded = self._decode_individual(neighbor)
+                if decoded is None:
+                    continue
+                neighbor_kind_counts[neighbor_kind] = neighbor_kind_counts.get(neighbor_kind, 0) + 1
+                candidate_records.append(
+                    {
+                        "candidate_id": candidate_id,
+                        "individual": neighbor,
+                        "origin": origin,
+                        "neighbor_kind": neighbor_kind,
+                        "features": decoded["features"],
+                        "deterministic_makespan": decoded["deterministic_makespan"],
+                    }
+                )
+
+        if not candidate_records:
+            return
+
+        predictions = self.surrogate.predict_many(candidate_records)
+        records_by_id = {record["candidate_id"]: record for record in candidate_records}
+        selected_ids = self._select_local_search_candidate_ids(predictions, records_by_id)
+
+        best_by_origin: Dict[int, WFJSSPIndividual] = {}
+        real_evaluations = 0
+        for prediction in predictions:
+            if prediction.candidate_id not in selected_ids:
+                continue
+            if stop_condition is not None and stop_condition():
+                break
+            record = records_by_id[prediction.candidate_id]
+            neighbor = record["individual"]
+            origin = record["origin"]
+            self.evaluate_real(neighbor, candidate_id=prediction.candidate_id)
+            real_evaluations += 1
+            if not np.isfinite(float(neighbor.fitness.get("makespan", math.inf))):
+                continue
+            origin_key = id(origin)
+            current_best = best_by_origin.get(origin_key)
+            if current_best is None or neighbor.fitness["makespan"] < current_best.fitness["makespan"]:
+                best_by_origin[origin_key] = neighbor
+
+        replacements = 0
+        best_improvement = 0.0
+        for origin in origins:
+            best_neighbor = best_by_origin.get(id(origin))
+            if best_neighbor is None:
+                continue
+            origin_makespan = float(origin.fitness.get("makespan", math.inf))
+            neighbor_makespan = float(best_neighbor.fitness.get("makespan", math.inf))
+            if neighbor_makespan < origin_makespan:
+                origin.sequence = best_neighbor.sequence[:]
+                origin.assignments = best_neighbor.assignments[:]
+                origin.workers = best_neighbor.workers[:]
+                origin.fitness = dict(best_neighbor.fitness)
+                origin.feasible = best_neighbor.feasible
+                replacements += 1
+                best_improvement = max(best_improvement, origin_makespan - neighbor_makespan)
+
+        self.population.sort(key=lambda x: x.fitness["makespan"])
+        self.last_local_search_metrics = {
+            "local_search_runs": 1,
+            "local_search_origins": len(origins),
+            "local_search_neighbors": len(candidate_records),
+            "local_search_predictions": len(predictions),
+            "local_search_real_evaluations": real_evaluations,
+            "local_search_replacements": replacements,
+            "local_search_best_improvement": float(best_improvement),
+            "local_search_worker_neighbors": neighbor_kind_counts.get("worker", 0),
+            "local_search_machine_worker_neighbors": neighbor_kind_counts.get("machine_worker", 0),
+            "local_search_sequence_swap_neighbors": neighbor_kind_counts.get("sequence_swap", 0),
+            "local_search_sequence_shift_neighbors": neighbor_kind_counts.get("sequence_shift", 0),
+        }
+
+        if self.surrogate_since_last_fit >= self._current_surrogate_retrain_interval():
+            if self.surrogate.fit():
+                self.surrogate_fit_count += 1
+                self.surrogate_since_last_fit = 0
+
+    def create_population(self, population_size: int, stop_condition=None) -> None:
+        """
+        Englisch:
+        Creates an initial population of individuals.
+        Deutsch:
+        Erstellt eine anfängliche Population von Individuen.
+        Args:
+            population_size (int): The size of the population to create.
+        Returns:
+            None
+        """
+        self.population = []
+        for _ in range(population_size):
+            if stop_condition is not None and stop_condition():
+                break
+            ind = WFJSSPIndividual.from_population(self.config, self.rng, self.population)
+            self.population.append(ind)
+        self.evaluate_batch(self.population)
+        self.population.sort(key=lambda x: x.fitness["makespan"])
+
+    def tournament_selection(self, tournament_size: int) -> WFJSSPIndividual:
+        """
+        Englisch:
+        Selects an individual using tournament selection.
+        Deutsch:
+        Wählt ein Individuum mittels Turnierselektion aus.
+        Args:
+            tournament_size (int): The size of the tournament.
+        Returns:
+            WFJSSPIndividual: The selected individual.
+        """
+        if not self.population:
+            raise RuntimeError("Cannot select from an empty population.")
+        if tournament_size == 0:
+            tournament_size = max(1, len(self.population) // 10)
+        tournament_size = min(max(1, tournament_size), len(self.population))
+        participants = self.rng.sample(range(len(self.population)), k=tournament_size)
+        winner = self.population[participants[0]]
+        for idx in participants[1:]:
+            if self.population[idx].fitness["makespan"] < winner.fitness["makespan"]:
+                winner = self.population[idx]
+        return winner
+
+    def recombine(self, tournament_size: int) -> WFJSSPIndividual:
+        """
+        Englisch:
+        Recombines two parents to create a child individual.
+        Deutsch:
+        Rekombiniert zwei Eltern, um ein Kind-Individuum zu erstellen.
+        Args:
+            tournament_size (int): The size of the tournament for selection.
+        Returns:
+            WFJSSPIndividual: The child individual.
+        """
+        parent_a = self.tournament_selection(tournament_size)
+        attempts = 0
+        while True:
+            parent_b = self.tournament_selection(tournament_size)
+            attempts += 1
+            if not parent_a.equals(parent_b) or attempts >= 100:
+                break
+        return WFJSSPIndividual.crossover(self.config, self.rng, parent_a, parent_b)
+
+    def create_offspring(
+        self,
+        offspring_amount: int,
+        tournament_size: int,
+        mutation_probability: float,
+        mutation_mix: Optional[Sequence[float]] = None,
+        stop_condition=None,
+    ) -> List[WFJSSPIndividual]:
+        """
+        Englisch:
+        Creates a new generation of offspring through recombination and mutation.
+        Deutsch:
+        Erstellt eine neue Generation von Nachkommen durch Rekombination und Mutation.
+        Args:
+            offspring_amount (int): Number of offspring to create.
+            tournament_size (int): Size of the tournament for selection.
+            mutation_probability (float): Probability of mutation.
+            mutation_mix (Optional[Sequence[float]]): Optional weighted mutation mix.
+            stop_condition: Optional callable that stops offspring creation early.
+        Returns:
+            List[WFJSSPIndividual]: List of offspring individuals.
+        """
+        offspring: List[WFJSSPIndividual] = []
+        operator_counts = {"sequence": 0, "machine": 0, "worker": 0, "events": 0, "no_op": 0}
+        for _ in range(offspring_amount):
+            if stop_condition is not None and stop_condition():
+                break
+            child = self.recombine(tournament_size)
+            if mutation_mix is None:
+                child.mutate(mutation_probability)
+            else:
+                child_counts = child.mutate_weighted(mutation_probability, mutation_mix)
+                for key, value in child_counts.items():
+                    operator_counts[key] = operator_counts.get(key, 0) + int(value)
+            offspring.append(child)
+        self.evaluate_batch(offspring)
+        self.last_mutation_operator_counts = operator_counts
+        return offspring
+
+    @staticmethod
+    def _normalize_mutation_mix(mix: Optional[Sequence[float]]) -> List[float]:
+        uniform = [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]
+        if mix is None:
+            return uniform
+        mix_array = np.asarray(mix, dtype=float).reshape(-1)
+        if mix_array.size != 3 or not np.all(np.isfinite(mix_array)):
+            return uniform
+        mix_array = np.clip(mix_array, 0.0, None)
+        total = float(np.sum(mix_array))
+        if total <= 0.0:
+            return uniform
+        return [float(value / total) for value in mix_array]
+
+    def _summarize_population(self) -> Dict[str, float]:
+        makespans = np.asarray(
+            [ind.fitness.get("makespan", math.inf) for ind in self.population],
+            dtype=float,
+        )
+        finite_mask = np.isfinite(makespans)
+        feasible_ratio = float(np.mean(finite_mask)) if makespans.size else 0.0
+        finite_values = makespans[finite_mask]
+        if finite_values.size == 0:
+            best = math.inf
+            mean = math.inf
+            std = 0.0
+        else:
+            best = float(np.min(finite_values))
+            mean = float(np.mean(finite_values))
+            std = float(np.std(finite_values))
+        return {
+            "best_makespan": best,
+            "mean_makespan": mean,
+            "std_makespan": std,
+            "infeasible_ratio": float(1.0 - feasible_ratio),
+            "diversity": self._estimate_population_diversity(),
+        }
+
+    def _estimate_population_diversity(self, sample_size: int = 6) -> float:
+        if len(self.population) <= 1:
+            return 0.0
+        sample_count = min(sample_size, len(self.population))
+        sampled = self.population[:sample_count]
+        best = sampled[0]
+        distances = [best.dissimilarity(ind) for ind in sampled[1:]]
+        if not distances:
+            return 0.0
+        return float(sum(distances) / len(distances))
+
+    def _build_rl_state(
+        self,
+        population_stats: Dict[str, float],
+        generation: int,
+        last_progress: int,
+        mutation_probability: float,
+        population_size: int,
+        offspring_amount: int,
+        restarts: int,
+        restart_flag: bool,
+        reward_history: Sequence[float],
+        mix_history: Sequence[Sequence[float]],
+        improvement_history: Sequence[float],
+    ) -> np.ndarray:
+        scale = max(1.0, population_stats["best_makespan"]) if np.isfinite(population_stats["best_makespan"]) else 1.0
+        max_wait = max(1, self.config.restart_generations)
+        max_mutation = max(self.config.max_mutation_probability, 1e-6)
+        base_population = max(1, self.config.population_size)
+        base_offspring = max(1, self.config.offspring_amount)
+        max_diversity = max(1.0, self.config.max_dissimilarity)
+
+        state = [
+            population_stats["best_makespan"] / scale if np.isfinite(population_stats["best_makespan"]) else 1.0,
+            population_stats["mean_makespan"] / scale if np.isfinite(population_stats["mean_makespan"]) else 1.0,
+            population_stats["std_makespan"] / scale if np.isfinite(population_stats["std_makespan"]) else 0.0,
+            min(1.0, max(0.0, (generation - last_progress) / max_wait)),
+            min(1.0, max(0.0, mutation_probability / max_mutation)),
+            population_size / base_population,
+            offspring_amount / base_offspring,
+            float(restarts) / max(1, max_wait),
+            min(1.0, population_stats["diversity"] / max_diversity),
+            min(1.0, max(0.0, population_stats["infeasible_ratio"])),
+            1.0 if restart_flag else 0.0,
+        ]
+
+        history_length = max(0, self.config.rl_history_length)
+        reward_tail = list(reward_history)[-history_length:]
+        reward_tail = [float(np.tanh(value)) for value in reward_tail]
+        reward_tail += [0.0] * (history_length - len(reward_tail))
+        state.extend(reward_tail)
+
+        mix_tail = list(mix_history)[-history_length:]
+        for mix in mix_tail:
+            normalized_mix = self._normalize_mutation_mix(mix)
+            state.extend(normalized_mix)
+        missing_mix_entries = history_length - len(mix_tail)
+        for _ in range(missing_mix_entries):
+            state.extend([1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0])
+
+        improvement_tail = list(improvement_history)[-history_length:]
+        improvement_tail = [float(np.tanh(value)) for value in improvement_tail]
+        improvement_tail += [0.0] * (history_length - len(improvement_tail))
+        state.extend(improvement_tail)
+
+        return np.nan_to_num(np.asarray(state, dtype=float), nan=0.0, posinf=1.0, neginf=-1.0)
+
+    def _compute_rl_reward(
+        self,
+        prev_stats: Dict[str, float],
+        new_stats: Dict[str, float],
+        operator_stats: Dict[str, int],
+        generations_since_improvement: int,
+        global_best_before: float,
+        global_best_after: float,
+    ) -> float:
+        weights = self.config.rl_reward_weights
+        best_scale = max(1.0, global_best_before if np.isfinite(global_best_before) else 1.0)
+        mean_scale = max(1.0, prev_stats["mean_makespan"] if np.isfinite(prev_stats["mean_makespan"]) else best_scale)
+        diversity_scale = max(1.0, self.config.max_dissimilarity)
+
+        global_improvement = 0.0
+        if np.isfinite(global_best_before) and np.isfinite(global_best_after):
+            global_improvement = (global_best_before - global_best_after) / best_scale
+
+        mean_improvement = 0.0
+        if np.isfinite(prev_stats["mean_makespan"]) and np.isfinite(new_stats["mean_makespan"]):
+            mean_improvement = (prev_stats["mean_makespan"] - new_stats["mean_makespan"]) / mean_scale
+
+        diversity_bonus = max(0.0, new_stats["diversity"]) / diversity_scale
+        infeasible_penalty = min(1.0, max(0.0, new_stats["infeasible_ratio"]))
+        stagnation_penalty = min(1.0, generations_since_improvement / max(1, self.config.restart_generations))
+        no_op_ratio = operator_stats.get("no_op", 0) / max(1, operator_stats.get("events", 0))
+
+        reward = (
+            weights.get("global_best_improvement", 0.0) * global_improvement
+            + weights.get("population_mean_improvement", 0.0) * mean_improvement
+            + weights.get("diversity_bonus", 0.0) * diversity_bonus
+            - weights.get("infeasible_penalty", 0.0) * infeasible_penalty
+            - weights.get("stagnation_penalty", 0.0) * stagnation_penalty
+            - 0.05 * no_op_ratio
+        )
+        return float(np.nan_to_num(reward, nan=0.0, posinf=0.0, neginf=0.0))
+
+    def _rl_state_size(self) -> int:
+        history_length = max(0, self.config.rl_history_length)
+        base_features = 11
+        return base_features + history_length + (history_length * 3) + history_length
+
+    @staticmethod
+    def _get_all_equal(best: WFJSSPIndividual, individuals: List[WFJSSPIndividual]) -> List[WFJSSPIndividual]:
+        """
+        Englisch:
+        Returns all individuals with the same fitness as the best individual.
+        Deutsch:
+        Gibt alle Individuen mit der gleichen Fitness wie das beste Individuum zurück.
+        Args:
+            best (WFJSSPIndividual): The best individual.
+            individuals (List[WFJSSPIndividual]): List of individuals to check.
+        Returns:
+            List[WFJSSPIndividual]: List of individuals with equal fitness.
+        """
+        return [x for x in individuals if x.fitness["makespan"] == best.fitness["makespan"]]
+
+    @staticmethod
+    def _is_real_evaluated(ind: WFJSSPIndividual) -> bool:
+        return ind.fitness.get("fitness_source") == "real"
+
+    def _best_real_individuals(self, individuals: List[WFJSSPIndividual]) -> List[WFJSSPIndividual]:
+        real = [ind for ind in individuals if self._is_real_evaluated(ind)]
+        if not real:
+            return []
+        real.sort(key=lambda x: x.fitness["makespan"])
+        best_value = real[0].fitness["makespan"]
+        return [ind for ind in real if ind.fitness["makespan"] == best_value]
+
+    def _evaluation_at_best_found(self, individuals: Sequence[WFJSSPIndividual]) -> int:
+        values = [
+            int(ind.fitness["evaluated_at_function_evaluations"])
+            for ind in individuals
+            if "evaluated_at_function_evaluations" in ind.fitness
+        ]
+        if values:
+            return min(values)
+        return int(self.function_evaluations)
+
+    @staticmethod
+    def _update_mutation_probability(p: float, generation: int, last_progress: int, max_wait: int, max_p: float) -> float:
+        """
+        Englisch:
+        Updates the mutation probability based on stagnation.
+        Deutsch:
+        Aktualisiert die Mutationswahrscheinlichkeit basierend auf Stagnation.
+        Args:
+            p (float): Current mutation probability.
+            generation (int): Current generation number.
+            last_progress (int): Last generation with progress.
+            max_wait (int): Maximum wait generations.
+            max_p (float): Maximum mutation probability.
+        Returns:
+            float: Updated mutation probability.
+        """
+        if max_wait <= 0:
+            return max_p
+        return p + ((((generation - last_progress) * (1.0 / max_wait)) ** 4) * max_p)
+
+    def run(
+        self,
+        max_generations: Optional[int] = None,
+        time_limit_s: Optional[float] = DEFAULT_TIME_LIMIT_S,
+        target_fitness: Optional[float] = None,
+        max_function_evaluations: Optional[int] = DEFAULT_MAX_FUNCTION_EVALUATIONS,
+        progress_interval_evaluations: Optional[int] = DEFAULT_PROGRESS_INTERVAL_EVALUATIONS,
+        keep_multiple: bool = True,
+        do_restart: bool = True,
+        history_callback: Optional[Callable[[dict], None]] = None,
+    ) -> dict:
+        """
+        Englisch:
+        Runs the genetic algorithm until one of the stopping criteria is met.
+        Deutsch:
+        Führt den genetischen Algorithmus aus, bis eines der Stoppkriterien erfüllt ist.
+        Args:
+            max_generations (Optional[int], optional): Maximum number of generations. Defaults to None.
+            time_limit_s (Optional[float], optional): Time limit in seconds. Defaults to 1200.
+            target_fitness (Optional[float], optional): Target fitness value. Defaults to None.
+            max_function_evaluations (Optional[int], optional): Maximum function evaluations. Defaults to 5_000_000.
+            progress_interval_evaluations (Optional[int], optional): Print progress after this many function evaluations. Defaults to 50_000.
+            keep_multiple (bool, optional): Whether to keep multiple best individuals. Defaults to True.
+            do_restart (bool, optional): Whether to perform restarts. Defaults to True.
+        Returns:
+            dict: Results including best individual, population, etc.
+        """
+        self.function_evaluations = 0
+        self.best_found_function_evaluations = None
+        self._max_function_evaluations = max_function_evaluations
+        start_time = time.time()
+        self._run_start_time = start_time
+        self._progress_interval_evaluations = progress_interval_evaluations
+        self._next_progress_evaluation = (
+            progress_interval_evaluations
+            if progress_interval_evaluations is not None and progress_interval_evaluations > 0
+            else None
+        )
+
+        def stop_limit_reached() -> bool:
+            if time_limit_s is not None and (time.time() - start_time) >= time_limit_s:
+                return True
+            if max_function_evaluations is not None and self.function_evaluations >= max_function_evaluations:
+                return True
+            return False
+
+        self.create_population(self.config.population_size, stop_condition=stop_limit_reached)
+        if not self.population:
+            raise RuntimeError("No individual could be evaluated before a stop limit was reached.")
+        population_size = self.config.population_size
+        offspring_amount = self.config.offspring_amount
+        tournament_size = self.config.tournament_size
+        mutation_probability = float(self.config.mutation_probability)
+        max_mutation_probability = self.config.max_mutation_probability
+        elitism = int(self.config.elitism_rate * population_size)
+        max_wait = self.config.restart_generations
+
+        overall_best = self._best_real_individuals(self.population)
+        if not overall_best:
+            overall_best = self._get_all_equal(self.population[0], self.population)
+        self.best_found_function_evaluations = self._evaluation_at_best_found(overall_best)
+        current_best = self._get_all_equal(self.population[0], self.population)
+        last_progress = 0
+        generation = 0
+        restarts = 0
+        history = []
+        reward_history: deque[float] = deque(maxlen=max(0, self.config.rl_history_length))
+        mix_history: deque[Sequence[float]] = deque(maxlen=max(0, self.config.rl_history_length))
+        improvement_history: deque[float] = deque(maxlen=max(0, self.config.rl_history_length))
+        rl_agent: Optional[RLMutationAgent] = None
+        rl_uniform_mix = [1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0]
+        current_mix = rl_uniform_mix[:]
+        current_reward = 0.0
+        current_value_estimate: Optional[float] = None
+        current_operator_stats = {"sequence": 0, "machine": 0, "worker": 0, "events": 0, "no_op": 0}
+
+        if self.config.enable_rl_mutation_control:
+            rl_agent = RLMutationAgent(
+                RLMutationAgentConfig(
+                    state_size=self._rl_state_size(),
+                    hidden_size=self.config.rl_hidden_size,
+                    learning_rate=self.config.rl_learning_rate,
+                    gamma=self.config.rl_gamma,
+                    gae_lambda=self.config.rl_lambda,
+                    clip_epsilon=self.config.rl_clip_epsilon,
+                    entropy_coef=self.config.rl_entropy_coef,
+                    value_coef=self.config.rl_value_coef,
+                    seed=self.config.rl_seed,
+                )
+            )
+            rl_agent.reset_episode()
+
+        def record_history() -> None:
+            point = {
+                "generation": generation,
+                "best_makespan": float(self.population[0].fitness["makespan"]),
+                "overall_best_makespan": float(overall_best[0].fitness["makespan"]),
+                "function_evaluations": int(self.function_evaluations),
+                "mutation_probability": float(mutation_probability),
+                "population_size": int(population_size),
+                "offspring_amount": int(offspring_amount),
+                "restarts": int(restarts),
+                "runtime_s": float(time.time() - start_time),
+                "rl_enabled": bool(self.config.enable_rl_mutation_control),
+                "mutation_mix": list(current_mix),
+                "rl_reward": float(current_reward),
+                "rl_value_estimate": None if current_value_estimate is None else float(current_value_estimate),
+                "seq_mutations": int(current_operator_stats.get("sequence", 0)),
+                "machine_mutations": int(current_operator_stats.get("machine", 0)),
+                "worker_mutations": int(current_operator_stats.get("worker", 0)),
+                "surrogate_enabled": bool(self.surrogate is not None),
+                "surrogate_ready": bool(self.surrogate is not None and self.surrogate.is_ready()),
+                "surrogate_samples": 0 if self.surrogate is None else len(self.surrogate.samples),
+                "surrogate_fit_count": int(self.surrogate_fit_count),
+                "surrogate_predictions": int(self.surrogate_predictions),
+                "surrogate_real_candidate_evaluations": int(self.surrogate_real_candidate_evaluations),
+                "best_fitness_source": self.population[0].fitness.get("fitness_source"),
+            }
+            point.update(self.last_surrogate_metrics)
+            point.update(self.last_local_search_metrics)
+            point.update(self._cumulative_surrogate_metrics())
+            history.append(point)
+            if history_callback is not None:
+                history_callback(dict(point))
+
+        record_history()
+
+        while True:
+            best_fitness = overall_best[0].fitness["makespan"]
+            if max_generations is not None and generation >= max_generations:
+                break
+            if stop_limit_reached():
+                break
+            if target_fitness is not None and best_fitness <= target_fitness:
+                break
+
+            if generation > 0 and last_progress < generation - 1:
+                updated_mutation_probability = self._update_mutation_probability(
+                    mutation_probability, generation, last_progress, max_wait, max_mutation_probability
+                )
+                mutation_probability = (
+                    updated_mutation_probability
+                    if do_restart
+                    else min(max_mutation_probability, updated_mutation_probability)
+                )
+
+            restart_happened = False
+            if do_restart and mutation_probability > max_mutation_probability:
+                if rl_agent is not None and rl_agent.has_pending_transitions():
+                    rl_agent.end_episode()
+                    rl_agent.update()
+                    rl_agent.reset_episode()
+                    reward_history.clear()
+                    mix_history.clear()
+                    improvement_history.clear()
+                max_population_size = 400
+                max_offspring_amount = max_population_size * 4
+                population_size = min(max_population_size, int(self.config.population_size_growth_rate * population_size))
+                offspring_amount = min(max_offspring_amount, int(self.config.population_size_growth_rate * offspring_amount))
+                elitism = max(0, int(population_size * self.config.max_elitism_rate * self.config.duration_variety))
+                tournament_size = max(1, int(population_size * self.config.max_tournament_rate * self.config.duration_variety))
+                current_best = []
+                self.create_population(population_size, stop_condition=stop_limit_reached)
+                if not self.population:
+                    break
+                restart_best_real = self._best_real_individuals(self.population)
+                if restart_best_real and restart_best_real[0].fitness["makespan"] < overall_best[0].fitness["makespan"]:
+                    overall_best = restart_best_real if keep_multiple else [restart_best_real[0]]
+                    self.best_found_function_evaluations = self._evaluation_at_best_found(overall_best)
+                mutation_probability = float(self.config.mutation_probability)
+                last_progress = generation
+                restarts += 1
+                restart_happened = True
+                if stop_limit_reached():
+                    break
+
+            prev_stats = self._summarize_population()
+            global_best_before = float(overall_best[0].fitness["makespan"])
+            rl_state = self._build_rl_state(
+                prev_stats,
+                generation,
+                last_progress,
+                mutation_probability,
+                population_size,
+                offspring_amount,
+                restarts,
+                restart_happened,
+                reward_history,
+                mix_history,
+                improvement_history,
+            )
+
+            rl_active = (
+                rl_agent is not None
+                and generation >= max(0, self.config.rl_warmup_generations)
+            )
+            current_mix = rl_uniform_mix[:]
+            current_value_estimate = None
+            current_reward = 0.0
+
+            if rl_active:
+                try:
+                    proposed_mix, aux = rl_agent.act(rl_state)
+                    current_mix = self._normalize_mutation_mix(proposed_mix)
+                    current_value_estimate = float(aux.get("value", 0.0))
+                    current_logprob = float(aux.get("logprob", 0.0))
+                except Exception:
+                    current_mix = rl_uniform_mix[:]
+                    current_value_estimate = 0.0
+                    current_logprob = 0.0
+            else:
+                current_logprob = 0.0
+
+            offspring = self.create_offspring(
+                offspring_amount,
+                tournament_size,
+                mutation_probability,
+                mutation_mix=current_mix if rl_active else None,
+                stop_condition=stop_limit_reached,
+            )
+            pool = offspring + self.population[:elitism]
+            if not pool:
+                break
+            pool.sort(key=lambda x: x.fitness["makespan"])
+            self.population = pool[:population_size]
+            current_operator_stats = dict(self.last_mutation_operator_counts)
+            self.last_local_search_metrics = self._empty_local_search_metrics()
+            local_search_interval = max(0, int(self.config.local_search_interval))
+            if (
+                local_search_interval > 0
+                and (generation + 1) % local_search_interval == 0
+                and not stop_limit_reached()
+            ):
+                self.run_local_search(stop_condition=stop_limit_reached)
+
+            if not current_best or self.population[0].fitness["makespan"] < current_best[0].fitness["makespan"]:
+                current_best = self._get_all_equal(self.population[0], self.population) if keep_multiple else [self.population[0]]
+                best_real = self._best_real_individuals(self.population)
+                if best_real and best_real[0].fitness["makespan"] < overall_best[0].fitness["makespan"]:
+                    overall_best = best_real if keep_multiple else [best_real[0]]
+                    self.best_found_function_evaluations = self._evaluation_at_best_found(overall_best)
+                    last_progress = generation
+                elif keep_multiple and best_real and best_real[0].fitness["makespan"] == overall_best[0].fitness["makespan"]:
+                    known = set(id(x) for x in overall_best)
+                    for ind in best_real:
+                        if id(ind) not in known:
+                            overall_best.append(ind)
+                            known.add(id(ind))
+            elif keep_multiple and self.population[0].fitness["makespan"] == current_best[0].fitness["makespan"]:
+                equals = self._get_all_equal(self.population[0], self.population)
+                known_current = set(id(x) for x in current_best)
+                for ind in equals:
+                    if id(ind) not in known_current:
+                        current_best.append(ind)
+                        known_current.add(id(ind))
+                best_real = self._best_real_individuals(self.population)
+                if best_real and best_real[0].fitness["makespan"] == overall_best[0].fitness["makespan"]:
+                    known_best = set(id(x) for x in overall_best)
+                    for ind in best_real:
+                        if id(ind) not in known_best:
+                            overall_best.append(ind)
+                            known_best.add(id(ind))
+
+            best_real = self._best_real_individuals(self.population)
+            if best_real and best_real[0].fitness["makespan"] < overall_best[0].fitness["makespan"]:
+                overall_best = best_real if keep_multiple else [best_real[0]]
+                self.best_found_function_evaluations = self._evaluation_at_best_found(overall_best)
+                last_progress = generation
+            elif keep_multiple and best_real and best_real[0].fitness["makespan"] == overall_best[0].fitness["makespan"]:
+                known_best = set(id(x) for x in overall_best)
+                for ind in best_real:
+                    if id(ind) not in known_best:
+                        overall_best.append(ind)
+                        known_best.add(id(ind))
+
+            new_stats = self._summarize_population()
+            global_best_after = float(overall_best[0].fitness["makespan"])
+            improvement_value = 0.0
+            if np.isfinite(global_best_before) and np.isfinite(global_best_after):
+                improvement_value = (global_best_before - global_best_after) / max(1.0, global_best_before)
+            current_reward = self._compute_rl_reward(
+                prev_stats,
+                new_stats,
+                current_operator_stats,
+                max(0, generation - last_progress),
+                global_best_before,
+                global_best_after,
+            )
+            reward_history.append(current_reward)
+            mix_history.append(current_mix)
+            improvement_history.append(improvement_value)
+
+            if rl_active and rl_agent is not None:
+                rl_agent.store_transition(
+                    rl_state,
+                    current_mix,
+                    current_reward,
+                    current_value_estimate if current_value_estimate is not None else 0.0,
+                    current_logprob,
+                    False,
+                )
+                if (generation + 1) % max(1, self.config.rl_update_interval) == 0:
+                    rl_agent.update()
+
+            generation += 1
+            record_history()
+
+        if rl_agent is not None and rl_agent.has_pending_transitions():
+            rl_agent.end_episode()
+            rl_agent.update()
+
+        return {
+            "best": overall_best[0],
+            "best_all_equal": overall_best,
+            "population": self.population,
+            "generations": generation,
+            "function_evaluations": self.function_evaluations,
+            "best_found_function_evaluations": (
+                int(self.best_found_function_evaluations)
+                if self.best_found_function_evaluations is not None
+                else int(self.function_evaluations)
+            ),
+            "runtime_s": time.time() - start_time,
+            "restarts": restarts,
+            "history": history,
+            "surrogate_samples": 0 if self.surrogate is None else len(self.surrogate.samples),
+            "surrogate_fit_count": self.surrogate_fit_count,
+            "surrogate_predictions": self.surrogate_predictions,
+            "surrogate_real_candidate_evaluations": self.surrogate_real_candidate_evaluations,
+        }
+
+
+# convenience helper -------------------------------------------------------
+
+def build_ga_from_worker_encoding(worker_encoding, **kwargs) -> WFJSSPGA:
+    """
+    Englisch:
+    Convenience function to build a WFJSSPGA instance from a worker encoding object that provides durations() and job_sequence() methods.
+    Deutsch:
+    Hilfsfunktion, um eine WFJSSPGA-Instanz aus einem Worker-Encoding-Objekt zu erstellen, das durations() und job_sequence() Methoden bereitstellt.
+    Args:
+        worker_encoding: Object with durations() and job_sequence() methods.
+        **kwargs: Additional keyword arguments for WorkerGAConfig.
+    Returns:
+        WFJSSPGA: The initialized genetic algorithm instance.
+    """
+    cfg = WorkerGAConfig(
+        durations=worker_encoding.durations(),
+        job_sequence=list(worker_encoding.job_sequence()),
+        **kwargs,
+    )
+    return WFJSSPGA(cfg)

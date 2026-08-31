@@ -1,0 +1,59 @@
+Hyperparameters
+===============
+
+[notes]
+HPO trial config. RL mutation control is disabled.
+One Slurm array task evaluates one complete configuration for this phase.
+
+[run]
+config_id: R0027_76c00c7beb
+instances: ["0_BehnkeGeiger_42_workers.fjs","0_BehnkeGeiger_46_workers.fjs","0_BehnkeGeiger_60_workers.fjs","1_Brandimarte_14_workers.fjs","2a_Hurink_sdata_1_workers.fjs","2a_Hurink_sdata_18_workers.fjs","2a_Hurink_sdata_54_workers.fjs","2a_Hurink_sdata_61_workers.fjs"]
+instances_dir: instances/fjssp-w
+phase: screening
+phase_spec: {"final_simulations":20,"instance_count":8,"instance_pool":"train","max_function_evaluations":250000,"n_configs":48,"run_count":2,"source_phase":null,"time_limit_s":7200}
+simulation_workers: 2
+surrogate_n_jobs: 2
+tasks_pending_at_start: 16
+tasks_total: 16
+uncertainty_json: config/scenario2_uncertainty.json
+workers: 10
+
+[ga_config]
+elitism_rate: 0.05
+enable_rl_mutation_control: false
+local_search_interval: 30
+local_search_min_predicted_improvement: 0.0
+local_search_neighbors_per_origin: 256
+local_search_origin_count: 2
+local_search_random_k: 2
+local_search_real_eval_limit_per_origin: 16
+local_search_top_k: 6
+local_search_uncertain_k: 4
+offspring_amount: 1200
+population_size: 240
+restart_generations: 400
+surrogate_max_features: sqrt
+surrogate_max_retrain_interval_real_candidates: 1000
+surrogate_max_training_samples: 8000
+surrogate_min_real_per_generation: 6
+surrogate_min_samples_leaf: 5
+surrogate_n_estimators: 200
+surrogate_n_jobs: -1
+surrogate_random_fraction: 0.0025
+surrogate_retrain_interval_growth_factor: 2.0
+surrogate_retrain_interval_growth_samples: 5000
+surrogate_retrain_interval_real_candidates: 75
+surrogate_top_fraction: 0.015
+surrogate_uncertain_fraction: 0.0025
+surrogate_warmup_real_candidates: 1200
+use_surrogate_evaluation: true
+
+[run_config]
+do_restart: false
+final_simulations: 20
+internal_simulations: 12
+keep_multiple: false
+max_function_evaluations: 250000
+max_generations: None
+progress_interval_evaluations: 100000
+time_limit_s: 7200

@@ -1,0 +1,2 @@
+Instance;SuccessfulRuns;BestFitness;MeanFitness;StdFitness;BestRun;BestSeed;MeanRuntimeSeconds;MeanFunctionEvaluations
+0_BehnkeGeiger_46_workers.fjs;10;260.81704769676065;288.5783923514004;15.62196564259033;1;1000;68246.72564535141;4266773
